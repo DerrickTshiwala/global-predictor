@@ -31,7 +31,6 @@ user_bankroll = st.sidebar.number_input("Your Account Balance (any currency)", m
 st.header("1. Select Live Global Feed")
 API_KEY = st.text_input("Enter Your Free 'The Odds API' Key", value="45abb5e26fb108e9a81ca9570df8666d", type="password")
 
-# Complete directory mapping out every global market category, explicitly adding International Tiers
 global_leagues_directory = {
     "🌍 FIFA World Cup / Qualifiers": "soccer_fifa_world_cup",
     "🏆 UEFA Nations League": "soccer_uefa_nations_league",
@@ -60,7 +59,6 @@ home_team = ""
 away_team = ""
 
 if API_KEY:
-    # Querying deep feeds ensures all continental bookmaker lists populate
     url = f"https://the-odds-api.com{selected_sport_key}/odds/?apiKey={API_KEY}&regions=uk,eu,us,au&markets=h2h&oddsFormat=decimal"
     try:
         res = requests.get(url)
@@ -68,7 +66,6 @@ if API_KEY:
         if res.status_code == 200:
             live_matches = res.json()
             
-        # Fail-Safe Engine: Handles off-season or live schedule gaps seamlessly
         if len(live_matches) == 0:
             st.info("ℹ️ Live API matches resting for this layout. Running Simulated Value Engine:")
             
