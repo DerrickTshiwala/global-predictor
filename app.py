@@ -8,7 +8,7 @@ import requests
 import streamlit as st
 from scipy.stats import poisson
 
-APP_VERSION = "6.0"
+APP_VERSION = "6.1"
 DB = "football_intelligence.db"
 ODDS = "https://api.the-odds-api.com/v4"
 OF_RAW = "https://raw.githubusercontent.com/openfootball/football.json/master"
@@ -32,25 +32,56 @@ def init_db():
       away_team TEXT NOT NULL, home_goals INTEGER NOT NULL,
       away_goals INTEGER NOT NULL, round_name TEXT, imported_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS predictions(
-      id INTEGER PRIMARY KEY AUTOINCREMENT, prediction_time TEXT NOT NULL,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, prediction_time TEXT,
       event_id TEXT, sport_key TEXT, competition TEXT, commence_time TEXT,
-      home_team TEXT NOT NULL, away_team TEXT NOT NULL,
-      p_home REAL NOT NULL, p_draw REAL NOT NULL, p_away REAL NOT NULL,
-      pick TEXT NOT NULL, model_odds REAL, market_odds REAL,
-      edge REAL, ev REAL, verdict TEXT NOT NULL, model_version TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'OPEN', actual_result TEXT, profit_units REAL,
-      UNIQUE(event_id,prediction_time));
+      home_team TEXT, away_team TEXT,
+      p_home REAL, p_draw REAL, p_away REAL,
+      pick TEXT, model_odds REAL, market_odds REAL,
+      edge REAL, ev REAL, verdict TEXT, model_version TEXT,
+      status TEXT DEFAULT 'OPEN', actual_result TEXT, profit_units REAL);
     CREATE TABLE IF NOT EXISTS odds_snapshots(
       id INTEGER PRIMARY KEY AUTOINCREMENT, captured_at TEXT NOT NULL,
       event_id TEXT NOT NULL, sport_key TEXT, competition TEXT,
       commence_time TEXT, home_team TEXT, away_team TEXT, bookmaker TEXT,
-      market TEXT, outcome TEXT, price REAL,
-      UNIQUE(captured_at,event_id,bookmaker,market,outcome));
+      market TEXT, outcome TEXT, price REAL);
     CREATE INDEX IF NOT EXISTS ix_hist_date ON historical_matches(match_date);
     CREATE INDEX IF NOT EXISTS ix_pred_status ON predictions(status);
     CREATE INDEX IF NOT EXISTS ix_odds_event ON odds_snapshots(event_id);
     """)
-    c.commit(); c.close()
+
+    # CREATE TABLE IF NOT EXISTS does not modify an existing SQLite table.
+    # Migrate databases created by v4/v5/v6 automatically.
+    existing = {row[1] for row in c.execute("PRAGMA table_info(predictions)").fetchall()}
+    columns = {
+        "prediction_time": "TEXT",
+        "event_id": "TEXT",
+        "sport_key": "TEXT",
+        "competition": "TEXT",
+        "commence_time": "TEXT",
+        "home_team": "TEXT",
+        "away_team": "TEXT",
+        "p_home": "REAL",
+        "p_draw": "REAL",
+        "p_away": "REAL",
+        "pick": "TEXT",
+        "model_odds": "REAL",
+        "market_odds": "REAL",
+        "edge": "REAL",
+        "ev": "REAL",
+        "verdict": "TEXT",
+        "model_version": "TEXT",
+        "status": "TEXT",
+        "actual_result": "TEXT",
+        "profit_units": "REAL",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            c.execute(f"ALTER TABLE predictions ADD COLUMN {name} {definition}")
+
+    c.execute("UPDATE predictions SET status='OPEN' WHERE status IS NULL OR TRIM(status)=''")
+    c.execute("UPDATE predictions SET model_version=? WHERE model_version IS NULL OR TRIM(model_version)=''", (APP_VERSION,))
+    c.commit()
+    c.close()
 
 init_db()
 
@@ -132,11 +163,20 @@ def save_snapshots(events,sport):
 # ---------- free public-domain historical results ----------
 @st.cache_data(ttl=86400, show_spinner=False)
 def openfootball_paths():
-    r=requests.get(OF_TREE,timeout=35,headers={"User-Agent":"Football-Intelligence/6.0"})
-    if r.status_code!=200: raise RuntimeError(f"OpenFootball discovery {r.status_code}: {r.text[:400]}")
-    return [x["path"] for x in r.json().get("tree",[])
-            if x.get("type")=="blob" and x["path"].endswith(".json")
-            and re.search(r"/\d{4}(-\d{2})?/",x["path"])]
+    r=requests.get(OF_TREE,timeout=35,headers={"User-Agent":"Football-Intelligence-6.1"})
+    if r.status_code!=200:
+        raise RuntimeError(f"OpenFootball discovery {r.status_code}: {r.text[:500]}")
+    paths=[]
+    for x in r.json().get("tree",[]):
+        p=x.get("path","")
+        if x.get("type")!="blob" or not p.endswith(".json"):
+            continue
+        # Actual football.json paths are typically 2025-26/en.1.json,
+        # 2025-26/de.1.json, etc. The old regex incorrectly required
+        # a leading slash before the season directory.
+        if re.search(r"(^|/)\d{4}(?:-\d{2})?/[^/]+\.json$",p):
+            paths.append(p)
+    return sorted(set(paths))
 
 def season_from_path(p):
     for x in p.split("/"):
@@ -155,14 +195,14 @@ def parse_match(m,competition,season,path):
     key=f"openfootball:{path}|{d}|{team_key(h)}|{team_key(a)}|{hg}-{ag}"
     return ("openfootball",key,d,competition,season,str(h).strip(),str(a).strip(),hg,ag,m.get("round"),now())
 
-def import_history(seasons_back=6,max_files=150):
+def import_history(seasons_back=6):
     current=datetime.now().year
     paths=[]
     for p in openfootball_paths():
         s=season_from_path(p)
         y=int(s[:4]) if s else 0
         if y>=current-seasons_back-1: paths.append(p)
-    paths=sorted(paths)[:max_files]
+    paths=sorted(set(paths))
     c=conn(); files=0; rows=0; errors=[]
     for p in paths:
         try:
@@ -262,7 +302,8 @@ def backtest(h,competition="ALL",n_test=400,min_train=80):
         rows.append({"date":r.match_date.date().isoformat(),"competition":r.competition,
                      "home":r.home_team,"away":r.away_team,"p_home":p[0],"p_draw":p[1],"p_away":p[2],
                      "pick":pick(p),"actual":y,"correct":int(pick(p)==y),
-                     "brier":float(np.sum((p-one)**2)),"log_loss":float(-math.log(max(p[["H","D","A"].index(y)],1e-12))),
+                     "brier":float(np.sum((p-one)**2)),
+                     "log_loss":float(-math.log(max(p[["H","D","A"].index(y)],1e-12))),
                      "xg_home":xh,"xg_away":xa})
     d=pd.DataFrame(rows)
     return d,{"matches":len(d),"accuracy":d.correct.mean(),"brier":d.brier.mean(),"log_loss":d.log_loss.mean()}
@@ -286,8 +327,8 @@ def settle(api_key,sport):
     c.commit();c.close();return done
 
 # ---------- UI ----------
-st.title(f"âš½ Football Intelligence Platform v{APP_VERSION}")
-st.caption("Automated public-domain results â€¢ dynamically discovered live odds â€¢ leakage-safe modelling â€¢ backtesting â€¢ EV â€¢ paper ROI")
+st.title(f"⚽ Football Intelligence Platform v{APP_VERSION}")
+st.caption("Automated public-domain results • dynamically discovered live odds • leakage-safe modelling • backtesting • EV • paper ROI")
 
 with st.sidebar:
     key=st.text_input("The Odds API key",value=st.secrets.get("ODDS_API_KEY","") if hasattr(st,"secrets") else "",type="password")
@@ -321,7 +362,7 @@ with live:
                 label=st.selectbox("Competition",list(opts))
                 sport=opts[label]["key"]
                 events,headers=live_odds(key,sport)
-                st.caption(f"{len(events)} events â€¢ API credits remaining: {headers.get('x-requests-remaining','?')}")
+                st.caption(f"{len(events)} events • API credits remaining: {headers.get('x-requests-remaining','?')}")
                 save_snapshots(events,sport)
                 rows=[]
                 for e in events:
@@ -370,31 +411,45 @@ with hist:
 
 with bt:
     st.subheader("Walk-forward out-of-sample backtest")
-    comps=["ALL"]+sorted(h.competition.dropna().unique().tolist()) if len(h) else ["ALL"]
-    comp=st.selectbox("Competition",comps)
-    ntest=st.slider("Test matches",50,1000,min(300,max(50,len(h)-80)))
-    if st.button("Run backtest"):
-        with st.spinner("Running chronological predictions without future-data leakage..."):
-            out,m=backtest(h,comp,ntest)
-        if "error" in m: st.warning(m["error"])
-        else:
-            q1,q2,q3,q4=st.columns(4)
-            q1.metric("Matches",m["matches"]);q2.metric("Accuracy",f"{m['accuracy']*100:.2f}%")
-            q3.metric("Brier",f"{m['brier']:.4f}");q4.metric("Log loss",f"{m['log_loss']:.4f}")
-            st.dataframe(out,use_container_width=True,hide_index=True)
+    if h.empty:
+        st.info("Historical data is empty. Open Historical Data and click Download / update history first.")
+    elif len(h) <= 80:
+        st.warning(f"Only {len(h):,} historical matches are available. More than 80 are required for the current backtest.")
+    else:
+        comps=["ALL"]+sorted(h.competition.dropna().unique().tolist())
+        comp=st.selectbox("Competition",comps)
+        available=len(h) if comp=="ALL" else int((h.competition==comp).sum())
+        max_test=max(1,min(1000,available-80))
+        default_test=min(300,max_test)
+        ntest=st.slider("Test matches",1,max_test,default_test)
+        st.caption(f"{available:,} matches available; {max(0,available-80):,} available after the minimum training window.")
+        if st.button("Run backtest"):
+            with st.spinner("Running chronological predictions without future-data leakage..."):
+                out,m=backtest(h,comp,ntest)
+            if "error" in m: st.warning(m["error"])
+            else:
+                q1,q2,q3,q4=st.columns(4)
+                q1.metric("Matches",m["matches"]);q2.metric("Accuracy",f"{m['accuracy']*100:.2f}%")
+                q3.metric("Brier",f"{m['brier']:.4f}");q4.metric("Log loss",f"{m['log_loss']:.4f}")
+                st.dataframe(out,use_container_width=True,hide_index=True)
 
 with perf:
     st.subheader("Archived prediction performance")
-    c=conn(); p=pd.read_sql_query("SELECT * FROM predictions ORDER BY prediction_time DESC",c);c.close()
-    if p.empty: st.info("No archived predictions yet.")
+    c=conn()
+    p=pd.read_sql_query("SELECT * FROM predictions ORDER BY COALESCE(prediction_time,'') DESC, id DESC",c)
+    c.close()
+    if p.empty:
+        st.info("No archived predictions yet.")
     else:
-        s=p[p.status=="SETTLED"]
-        profit=float(s.profit_units.sum()) if len(s) else 0
-        roi=profit/len(s) if len(s) else np.nan
+        s=p[p["status"].fillna("OPEN")=="SETTLED"].copy()
+        s["profit_units"]=pd.to_numeric(s["profit_units"],errors="coerce")
+        priced=s.dropna(subset=["profit_units"])
+        profit=float(priced["profit_units"].sum()) if len(priced) else 0.0
+        roi=profit/len(priced) if len(priced) else np.nan
         z1,z2,z3,z4=st.columns(4)
-        z1.metric("Settled",len(s));z2.metric("Wins",int((s.profit_units>0).sum()) if len(s) else 0)
-        z3.metric("Hit rate",f"{(s.profit_units>0).mean()*100:.2f}%" if len(s) else "â€”")
-        z4.metric("ROI / unit",f"{roi*100:.2f}%" if np.isfinite(roi) else "â€”")
+        z1.metric("Settled",len(s));z2.metric("Priced settled",len(priced))
+        z3.metric("Wins",int((priced["profit_units"]>0).sum()) if len(priced) else 0)
+        z4.metric("ROI / unit",f"{roi*100:.2f}%" if np.isfinite(roi) else "—")
         st.dataframe(p,use_container_width=True,hide_index=True)
 
 with dbtab:
@@ -403,6 +458,7 @@ with dbtab:
         st.write(f"**{t}:** {c.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]:,}")
     c.close()
     st.code(DB)
+    st.info("SQLite schema migration is automatic. Existing databases are upgraded when this app starts.")
     st.warning("Keep the API key in Streamlit secrets. Never commit secrets.toml to a public repository.")
 
 st.caption("Model outputs are estimates, not guarantees. VALUE CANDIDATE means the model/market thresholds were met; it does not mean a profitable outcome is certain.")
