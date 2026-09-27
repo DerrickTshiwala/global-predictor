@@ -32,14 +32,11 @@ st.header("1. Select Live Global Feed")
 API_KEY = st.text_input("Enter Your Free The Odds API Key", value="45abb5e26fb108e9a81ca9570df8666d", type="password")
 
 global_leagues_directory = {
-    # Top International & Club Tournaments
     "International - FIFA World Cup": "soccer_fifa_world_cup",
     "International - UEFA Nations League": "soccer_uefa_nations_league",
     "International - Africa Cup of Nations (AFCON)": "soccer_afcon",
     "International Clubs - UEFA Champions League": "soccer_uefa_champs_league",
     "International Clubs - UEFA Europa League": "soccer_uefa_europa_league",
-    
-    # Core European & Major Leagues
     "England - Premier League": "soccer_epl",
     "England - EFL Championship": "soccer_efl_champ",
     "South Africa - Premier Soccer League": "soccer_spl",
@@ -53,8 +50,6 @@ global_leagues_directory = {
     "Australia - A-League": "soccer_australia_aleague",
     "Brazil - Serie A": "soccer_brazil_campeonato",
     "Mexico - Liga MX": "soccer_mexico_ligamx",
-    
-    # Expanded Rest of the World Directory
     "Albania - Superliga": "soccer_albania",
     "Algeria - Ligue 1": "soccer_algeria",
     "Argentina - Primera Division": "soccer_argentina_primer_division",
@@ -201,3 +196,5 @@ if API_KEY:
                     if market['key'] == 'h2h':
                         for outcome in market['outcomes']:
                             if outcome['name'] == home_team:
+                                odds_list.append(float(outcome['price']))
+            
