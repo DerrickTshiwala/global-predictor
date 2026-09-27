@@ -16,11 +16,10 @@ user_tier = st.sidebar.selectbox("Your Account Plan", ["Free Tier", "Premium Mem
 user_bankroll = st.sidebar.number_input("Your Total Wallet Balance (any currency)", min_value=10.0, value=1000.0, step=10.0)
 
 # 2. DATA INGESTION: The Odds API Global Integration
-# Sign up at the-odds-api.com for a 100% free API key (500 free requests/month)
 API_KEY = st.text_input("Enter Free 'The Odds API' Key (Leave blank to use simulated demo data)", type="password")
 region = st.selectbox("Select Target Global Region for Odds", ["uk", "eu", "us", "au"])
 
-# Simulated Global Database (Fallback system)
+# Simulated Global Database
 global_league_db = {
     "English Premier League": {
         "Manchester City": {"attack": 1.8, "defense": 0.6},
@@ -42,21 +41,43 @@ away_team = st.selectbox("Select Away Team", away_teams)
 # Fetching real-time global odds if API key is provided
 bookie_odds = 2.15 # Default fallback
 if API_KEY:
+    # Use standard upcoming soccer filter endpoint to match variants safely
     SPORT = "soccer_epl" if selected_league == "English Premier League" else "soccer_spl"
-    url = f"https://the-odds-api.com{SPORT}/odds/?apiKey={API_KEY}&regions={region}&markets=h2h"
+    url = f"https://api.the-odds-api.com/v4/sports/{SPORT}/odds/?apiKey={API_KEY}&regions={region}&markets=h2h&oddsFormat=decimal"
     
     try:
-        response = requests.get(url).json()
-        st.success("⚡ Live international odds feed synchronized successfully!")
-        # Find specific match in live API payload
-        for match in response:
-            if match['home_team'] == home_team or match['away_team'] == away_team:
-                # Grab the first available global bookmaker's home win odds
-                bookie_odds = match['bookmakers'][0]['markets'][0]['outcomes'][0]['price']
-                st.info(f"Market Found! Highest Live Global Odds for {home_team} Win: {bookie_odds}")
-                break
+        res = requests.get(url)
+        if res.status_code == 200:
+            response = res.json()
+            match_found = False
+            
+            # Clean string parsing to prevent strict text alignment failures
+            for match in response:
+                h_api = match['home_team'].lower().replace(" ", "")
+                a_api = match['away_team'].lower().replace(" ", "")
+                h_local = home_team.lower().replace(" ", "")
+                a_local = away_team.lower().replace(" ", "")
+                
+                if h_local in h_api or a_local in a_api:
+                    # Look inside the returned list of bookmakers
+                    for bookmaker in match.get('bookmakers', []):
+                        for market in bookmaker.get('markets', []):
+                            if market['key'] == 'h2h':
+                                for outcome in market['outcomes']:
+                                    if outcome['name'].lower().replace(" ", "") == h_local:
+                                        bookie_odds = float(outcome['price'])
+                                        st.success(f"⚡ Live feed matched via {bookmaker['title']}! Live Odds for {home_team}: {bookie_odds}")
+                                        match_found = True
+                                        break
+                        if match_found: break
+                if match_found: break
+            
+            if not match_found:
+                st.info("⚠️ Fixture match not active in live API feed yet. Running on template database odds.")
+        else:
+            st.error(f"API Server Error: Status Code {res.status_code}. Checking your credit logs.")
     except Exception as e:
-        st.warning("Could not fetch live API odds. Running engine on default baseline odds.")
+        st.warning("Connection timeout. Running engine on default baseline odds.")
 
 # 3. ADVANCED ANALYSIS VARIABLES
 st.header("Match Day Conditions")
@@ -110,13 +131,13 @@ metric_col1.metric("Win Probability", f"{round(prob_home * 100, 1)}%")
 metric_col2.metric("True Minimum Odds", f"{round(fair_home_odds, 2)}")
 metric_col3.metric("Edge Value Margin", f"{round(((bookie_odds/fair_home_odds)-1)*100, 1)}%" if is_worth_it else "0.0%")
 
-# 6. BUSINESS FREEMIUM GATEWAY
+# 6. BUSINESS FREEMIUM GATEWAY (FIXED CRASH TYPO HERE)
 st.header("🔥 Premium Statistical Predictions")
 if user_tier == "Free Tier":
     st.warning("🔒 Exact Correct Score Matrices, BTTS Probability, and Kelly Criterion Stake Sizes are locked.")
     st.info("💡 Business Hint to Premium Users: Upgrade your account via our Patreon link to see exactly how much capital to risk on this value edge.")
 else:
-    st.subheader("🎯 Premium Engine Dashboard Unclusions")
+    st.subheader("🎯 Premium Engine Dashboard Inclusions")
     b_frac = bookie_odds - 1
     raw_k = ((prob_home * bookie_odds) - 1) / b_frac if b_frac > 0 else 0
     kelly_pct = max(0.0, raw_k * 0.25) # Fractional Kelly Guardrail
@@ -126,7 +147,7 @@ else:
     col_p2.metric("Exact Capital Stake Risk Size", f"${round(user_bankroll * kelly_pct, 2)}")
     
     st.write(f"**Alternative Market: Both Teams to Score (BTTS):** {round(prob_btts * 100, 1)}%")
-    st.write(f"**Alternative Market: Over 2.5 Total Match Goals:** {round(prob_over_25 * 100, 1)}%")
+    st.write(f"**Alternative Market: Over 2.5 Total Match Goals:** {round(prob_over25 * 100, 1)}%")
 
 st.markdown("---")
 st.caption("⚠️ Legal Disclaimer: This web application tracks mathematical calculations and data distributions. It does not provide legal financial betting advice. Winnings are never guaranteed. Users must comply with their local national gaming legislation. 18+ winners know when to stop.")
