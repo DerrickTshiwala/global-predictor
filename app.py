@@ -1,102 +1,11 @@
-# FIX THESE LINES IN YOUR CURRENT APP.PY
-
-# --------------------------------------------------
-# REPLACE BROKEN URL BLOCK
-# --------------------------------------------------
-
-url = (
-    f"https://api.the-odds-api.com/v4/sports/"
-    f"{selected_sport_key}/odds/"
-    f"?apiKey={API_KEY}"
-    f"&regions=uk,eu,us,au"
-    f"&markets=h2h"
-    f"&oddsFormat=decimal"
-)
-
-# --------------------------------------------------
-# REPLACE ALL HTML ENTITIES
-# --------------------------------------------------
-
-# Change every:
-# &gt;
-# to:
-# >
-
-# Examples:
-
-if h > a:
-    prob_home += joint_prob
-elif h == a:
-    prob_draw += joint_prob
-else:
-    prob_away += joint_prob
-
-if h > 0 and a > 0:
-    prob_btts += joint_prob
-
-if h + a > 2:
-    prob_over25 += joint_prob
-
-fair_home_odds = (
-    1 / prob_home
-    if prob_home > 0
-    else 999.0
-)
-
-is_worth_it = bookie_odds > fair_home_odds
-
-raw_kelly = (
-    ((prob_home * bookie_odds) - 1) / b
-    if b > 0
-    else 0
-)
-
-# --------------------------------------------------
-# IMPORTS
-# --------------------------------------------------
-
 import streamlit as st
+import requests
 import scipy.stats as stats
 import pandas as pd
-import numpy as np
-import requests
 import os
+from datetime import datetime, timezone
 
-from datetime import (
-    datetime,
-    timezone
-)
-
-# --------------------------------------------------
-# STREAMLIT SECRETS PASSWORD
-# --------------------------------------------------
-
-PREMIUM_PASSWORD = st.secrets.get(
-    "PREMIUM_PASSWORD",
-    ""
-)
-
-if user_tier_input == "Premium Member":
-
-    secret_password = st.sidebar.text_input(
-        "Enter Premium Member Password",
-        type="password"
-    )
-
-    if secret_password == PREMIUM_PASSWORD:
-        user_tier = "Premium Member (Unlocked)"
-        st.sidebar.success(
-            "Premium Features Unlocked!"
-        )
-
-    elif secret_password:
-        st.sidebar.error(
-            "Invalid Password"
-        )
-
-# --------------------------------------------------
-# TEAM RATINGS
-# --------------------------------------------------
+st.set_page_config(page_title="Universal Football Analytics and Live Value Engine", layout="wide")
 
 TEAM_RATINGS = {
     "Argentina": 2.10,
@@ -118,309 +27,167 @@ TEAM_RATINGS = {
     "Real Madrid": 2.20
 }
 
-home_rating = TEAM_RATINGS.get(
-    home_team,
-    1.45
-)
+st.title("Universal Football Analytics and Live Value Engine")
 
-away_rating = TEAM_RATINGS.get(
-    away_team,
-    1.20
-)
+st.sidebar.header("Subscription and Wallet Settings")
+plan = st.sidebar.selectbox("Account Plan", ["Free Tier", "Premium Member"])
+password = ""
+user_tier = "Free Tier"
 
-base_home_xg = (
-    home_rating
-    * (0.85 if is_derby else 1.0)
-    * (0.90 if home_fatigue else 1.0)
-)
+if plan == "Premium Member":
+    password = st.sidebar.text_input("Premium Password", type="password")
+    premium_password = st.secrets.get("PREMIUM_PASSWORD", "")
+    if password and password == premium_password:
+        user_tier = "Premium"
+        st.sidebar.success("Premium Unlocked")
 
-base_away_xg = (
-    away_rating
-    * (1.15 if is_derby else 1.0)
-    * (0.90 if away_fatigue else 1.0)
-)
+bankroll = st.sidebar.number_input("Bankroll", min_value=10.0, value=1000.0)
 
-# --------------------------------------------------
-# FIXTURE INFORMATION
-# --------------------------------------------------
+api_key = st.text_input("Odds API Key", type="password")
+
+leagues = {
+    "UEFA Nations League": "soccer_uefa_nations_league",
+    "Premier League": "soccer_epl",
+    "Champions League": "soccer_uefa_champs_league",
+    "La Liga": "soccer_spain_la_liga"
+}
+
+league = st.selectbox("Competition", list(leagues.keys()))
+
+live_matches = []
+home_team = "Home Team"
+away_team = "Away Team"
+bookie_odds = 2.0
+kickoff = None
+
+if api_key:
+    url = (
+        f"https://api.the-odds-api.com/v4/sports/{leagues[league]}/odds/"
+        f"?apiKey={api_key}&regions=uk,eu&markets=h2h&oddsFormat=decimal"
+    )
+
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            live_matches = response.json()
+    except Exception:
+        pass
 
 if live_matches:
+    options = {
+        f"{m['home_team']} vs {m['away_team']}": m
+        for m in live_matches
+    }
 
-    commence_time = target_match.get(
-        "commence_time"
-    )
+    selected = st.selectbox("Match", list(options.keys()))
+    match = options[selected]
 
-    if commence_time:
+    home_team = match["home_team"]
+    away_team = match["away_team"]
 
-        kickoff = datetime.fromisoformat(
-            commence_time.replace(
-                "Z",
-                "+00:00"
-            )
-        )
+    commence = match.get("commence_time")
+    if commence:
+        kickoff = datetime.fromisoformat(commence.replace("Z", "+00:00"))
 
-        now = datetime.now(
-            timezone.utc
-        )
+    odds = []
+    for bookmaker in match.get("bookmakers", []):
+        for market in bookmaker.get("markets", []):
+            if market.get("key") == "h2h":
+                for outcome in market.get("outcomes", []):
+                    if outcome.get("name") == home_team:
+                        odds.append(float(outcome.get("price", 0)))
 
-        remaining = kickoff - now
+    if odds:
+        bookie_odds = max(odds)
+else:
+    home_team = "Real Madrid"
+    away_team = "Bayern Munich"
 
-        st.subheader(
-            "Fixture Information"
-        )
+if kickoff:
+    st.info(f"Kick Off: {kickoff.strftime('%d %b %Y %H:%M UTC')}")
+    st.info(f"Countdown: {kickoff - datetime.now(timezone.utc)}")
 
-        st.write(
-            f"Competition: {selected_league_name}"
-        )
+is_derby = st.checkbox("Derby")
+home_fatigue = st.checkbox(f"{home_team} Fatigue")
+away_fatigue = st.checkbox(f"{away_team} Fatigue")
 
-        st.write(
-            f"Kick-off: "
-            f"{kickoff.strftime('%d %b %Y %H:%M UTC')}"
-        )
+home_rating = TEAM_RATINGS.get(home_team, 1.45)
+away_rating = TEAM_RATINGS.get(away_team, 1.20)
 
-        st.info(
-            f"Kick-off In: {remaining}"
-        )
+home_xg = home_rating * (0.85 if is_derby else 1.0) * (0.9 if home_fatigue else 1.0)
+away_xg = away_rating * (1.15 if is_derby else 1.0) * (0.9 if away_fatigue else 1.0)
 
-# --------------------------------------------------
-# FAIR ODDS ALL OUTCOMES
-# --------------------------------------------------
-
-fair_draw_odds = (
-    1 / prob_draw
-    if prob_draw > 0
-    else 999
-)
-
-fair_away_odds = (
-    1 / prob_away
-    if prob_away > 0
-    else 999
-)
-
-# --------------------------------------------------
-# FULL PROBABILITY MATRIX
-# --------------------------------------------------
-
-st.subheader(
-    "1X2 Probability Matrix"
-)
-
-p1, p2, p3 = st.columns(3)
-
-p1.metric(
-    "Home",
-    f"{prob_home * 100:.1f}%"
-)
-
-p2.metric(
-    "Draw",
-    f"{prob_draw * 100:.1f}%"
-)
-
-p3.metric(
-    "Away",
-    f"{prob_away * 100:.1f}%"
-)
-
-# --------------------------------------------------
-# CORRECT SCORE MATRIX
-# --------------------------------------------------
-
+prob_home = prob_draw = prob_away = prob_btts = prob_over25 = 0.0
 score_probs = []
 
-for h in range(6):
-    for a in range(6):
+for h in range(7):
+    for a in range(7):
+        p = stats.poisson.pmf(h, home_xg) * stats.poisson.pmf(a, away_xg)
+        score_probs.append((f"{h}-{a}", p))
 
-        p = (
-            stats.poisson.pmf(
-                h,
-                base_home_xg
-            )
-            *
-            stats.poisson.pmf(
-                a,
-                base_away_xg
-            )
-        )
+        if h > a:
+            prob_home += p
+        elif h == a:
+            prob_draw += p
+        else:
+            prob_away += p
 
-        score_probs.append(
-            (
-                f"{h}-{a}",
-                p
-            )
-        )
+        if h > 0 and a > 0:
+            prob_btts += p
 
-score_probs.sort(
-    key=lambda x: x[1],
-    reverse=True
-)
+        if h + a > 2:
+            prob_over25 += p
 
-predicted_score = score_probs[0][0]
+score_probs.sort(key=lambda x: x[1], reverse=True)
 
-st.subheader(
-    "Predicted Scoreline"
-)
+fair_home = 1 / prob_home if prob_home > 0 else 999
+fair_draw = 1 / prob_draw if prob_draw > 0 else 999
+fair_away = 1 / prob_away if prob_away > 0 else 999
 
-st.success(
-    predicted_score
-)
+st.subheader("Probability Matrix")
 
-# --------------------------------------------------
-# CONFIDENCE SCORE
-# --------------------------------------------------
+c1, c2, c3 = st.columns(3)
+c1.metric("Home", f"{prob_home*100:.1f}%")
+c2.metric("Draw", f"{prob_draw*100:.1f}%")
+c3.metric("Away", f"{prob_away*100:.1f}%")
 
-confidence = min(
-    100,
-    round(
-        abs(
-            prob_home - prob_away
-        )
-        * 100
-        + 50
-    )
-)
+prediction = home_team + " Win"
+if prob_away > prob_home and prob_away > prob_draw:
+    prediction = away_team + " Win"
+elif prob_draw > prob_home and prob_draw > prob_away:
+    prediction = "Draw"
 
-st.metric(
-    "Confidence Score",
-    f"{confidence}/100"
-)
+confidence = min(100, round(abs(prob_home - prob_away) * 100 + 50))
 
-# --------------------------------------------------
-# RECOMMENDED SELECTION
-# --------------------------------------------------
+st.success(f"Recommended Selection: {prediction}")
+st.metric("Confidence", f"{confidence}/100")
+st.metric("Best Home Odds", f"{bookie_odds:.2f}")
+st.metric("Fair Home Odds", f"{fair_home:.2f}")
 
-if prob_home > prob_draw and prob_home > prob_away:
+st.subheader("Most Likely Scores")
+for score, p in score_probs[:5]:
+    st.write(f"{score} : {p*100:.2f}%")
 
-    recommendation = (
-        f"{home_team} Win"
-    )
-
-elif prob_away > prob_home:
-
-    recommendation = (
-        f"{away_team} Win"
-    )
-
-else:
-
-    recommendation = "Draw"
-
-st.subheader(
-    "Recommended Selection"
-)
-
-st.success(
-    recommendation
-)
-
-# --------------------------------------------------
-# TOP CORRECT SCORES
-# --------------------------------------------------
-
-st.subheader(
-    "Most Likely Scores"
-)
-
-for score, probability in score_probs[:5\]:
-    st.write(
-        f"{score}: "
-        f"{probability * 100:.2f}%"
-    )
-
-# --------------------------------------------------
-# PREDICTION HISTORY LOG
-# --------------------------------------------------
-
-history_file = (
-    "prediction_istory.csv"
-)
-
-record = pd.DataFrame([
-    {
-        "Home": home_team,
-        "Away": away_team,
-        "Prediction": recommendation,
-        "Score": predicted_score,
-        "Confidence": confidence
-    }
-])
-
-if os.path.exists(
-    history_file
-):
-
-    record.to_csv(
-        history_file,
-        mode="a",
-        index=False,
-        header=False
-    )
-
-else:
-
-    record.to_csv(
-        history_file,
-        index=False
-    )
-
-# --------------------------------------------------
-# PREMIUM DASHBOARD
-# --------------------------------------------------
-
-if user_tier != "Free Tier":
-
-    st.subheader(
-        "Premium Engine Dashboard"
-    )
-
+if user_tier == "Premium":
     b = bookie_odds - 1
+    kelly = (((prob_home * bookie_odds) - 1) / b) if b > 0 else 0
+    kelly = max(0, kelly * 0.25)
 
-    raw_kelly = (
-        ((prob_home * bookie_odds) - 1)
-        / b
-        if b > 0
-        else 0
-    )
+    st.subheader("Premium Dashboard")
+    st.write(f"BTTS: {prob_btts*100:.1f}%")
+    st.write(f"Over 2.5 Goals: {prob_over25*100:.1f}%")
+    st.write(f"Kelly %: {kelly*100:.2f}%")
+    st.write(f"Suggested Stake: {bankroll*kelly:.2f}")
 
-    kelly_pct = max(
-        0.0,
-        raw_kelly * 0.25
-    )
+history = pd.DataFrame([{
+    'Home': home_team,
+    'Away': away_team,
+    'Prediction': prediction,
+    'Confidence': confidence
+}])
 
-    c1, c2 = st.columns(2)
-
-    c1.metric(
-        "Kelly %",
-        f"{kelly_pct * 100:.2f}%"
-    )
-
-    c2.metric(
-        "Stake",
-        f"{user_bankroll * kelly_pct:.2f}"
-    )
-
-    st.write(
-        f"BTTS Probability: "
-        f"{prob_btts * 100:.1f}%"
-    )
-
-    st.write(
-        f"Over 2.5 Goals: "
-        f"{prob_over25 * 100:.1f}%"
-    )
-
-    st.write(
-        f"Fair Home Odds: "
-        f"{fair_home_odds:.2f}"
-    )
-
-    st.write(
-        f"Fair Draw Odds: "
-        f"{fair_draw_odds:.2f}"
-    )
-
-    st.write(
-        f"Fair Away Odds: "
-        f"{fair_away_odds:.2f}"
-    )
+file_name = 'prediction_history.csv'
+if os.path.exists(file_name):
+    history.to_csv(file_name, mode='a', header=False, index=False)
+else:
+    history.to_csv(file_name, index=False)
