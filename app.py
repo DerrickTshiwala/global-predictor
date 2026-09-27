@@ -7,11 +7,11 @@ import requests
 # Page Layout Configuration
 st.set_page_config(page_title="Universal Value Predictor Engine", layout="centered")
 
-st.title("🌐 Universal Football Analytics & Live Value Engine")
+st.title("Universal Football Analytics and Live Value Engine")
 st.markdown("---")
 
-# 1. SIDEBAR: Secure Monetization & Gatekeeper Controls
-st.sidebar.header("💳 Subscription & Wallet Settings")
+# 1. SIDEBAR: Secure Monetization and Gatekeeper Controls
+st.sidebar.header("Subscription and Wallet Settings")
 user_tier_input = st.sidebar.selectbox("Your Account Plan", ["Free Tier", "Premium Member"])
 
 user_tier = "Free Tier"
@@ -19,34 +19,34 @@ if user_tier_input == "Premium Member":
     secret_password = st.sidebar.text_input("Enter Premium Member Password", type="password")
     if secret_password == "VIP-MATH-2026":
         user_tier = "Premium Member (Unlocked)"
-        st.sidebar.success("🔒 Premium Features Unlocked!")
+        st.sidebar.success("Premium Features Unlocked!")
     else:
         if secret_password:
-            st.sidebar.error("❌ Invalid Password")
+            st.sidebar.error("Invalid Password")
         user_tier = "Free Tier"
 
 user_bankroll = st.sidebar.number_input("Your Account Balance (any currency)", min_value=10.0, value=1000.0, step=10.0)
 
-# 2. DATA INGESTION: Comprehensive Global Club & National Teams Directory
+# 2. DATA INGESTION: Global Club and National Teams Directory
 st.header("1. Select Live Global Feed")
-API_KEY = st.text_input("Enter Your Free 'The Odds API' Key", value="45abb5e26fb108e9a81ca9570df8666d", type="password")
+API_KEY = st.text_input("Enter Your Free The Odds API Key", value="45abb5e26fb108e9a81ca9570df8666d", type="password")
 
 global_leagues_directory = {
-    "🌍 FIFA World Cup / Qualifiers": "soccer_fifa_world_cup",
-    "🏆 UEFA Nations League": "soccer_uefa_nations_league",
-    "🌍 Africa Cup of Nations (AFCON)": "soccer_afcon",
-    "🏆 UEFA Champions League": "soccer_uefa_champs_league",
-    "🏴󠁧󠁢󠁥󠁮󠁧󠁿 English Premier League": "soccer_epl",
-    "🇿🇦 South African PSL": "soccer_spl",
-    "🇪🇸 Spanish La Liga": "soccer_spain_la_liga",
-    "🇮🇹 Italian Serie A": "soccer_italy_serie_a",
-    "🇩🇪 German Bundesliga": "soccer_germany_bundesliga",
-    "🇫🇷 French Ligue 1": "soccer_france_ligue_one",
-    "🇪🇺 UEFA Europa League": "soccer_uefa_europa_league",
-    "🇺🇸 Major League Soccer (MLS)": "soccer_usa_mls",
-    "🇦🇺 Australian A-League": "soccer_australia_aleague",
-    "🇧🇷 Brazilian Serie A": "soccer_brazil_campeonato",
-    "🇲🇽 Mexican Liga MX": "soccer_mexico_ligamx"
+    "Global - FIFA World Cup and Qualifiers": "soccer_fifa_world_cup",
+    "Europe - UEFA Nations League": "soccer_uefa_nations_league",
+    "Africa - Africa Cup of Nations (AFCON)": "soccer_afcon",
+    "Europe - UEFA Champions League": "soccer_uefa_champs_league",
+    "England - Premier League": "soccer_epl",
+    "South Africa - Premier Soccer League": "soccer_spl",
+    "Spain - La Liga": "soccer_spain_la_liga",
+    "Italy - Serie A": "soccer_italy_serie_a",
+    "Germany - Bundesliga": "soccer_germany_bundesliga",
+    "France - Ligue 1": "soccer_france_ligue_one",
+    "Europe - UEFA Europa League": "soccer_uefa_europa_league",
+    "USA - Major League Soccer (MLS)": "soccer_usa_mls",
+    "Australia - A-League": "soccer_australia_aleague",
+    "Brazil - Serie A": "soccer_brazil_campeonato",
+    "Mexico - Liga MX": "soccer_mexico_ligamx"
 }
 
 selected_league_name = st.selectbox("Choose Competition Venue", list(global_leagues_directory.keys()))
@@ -67,15 +67,15 @@ if API_KEY:
             live_matches = res.json()
             
         if len(live_matches) == 0:
-            st.info("ℹ️ Live API matches resting for this layout. Running Simulated Value Engine:")
+            st.info("Live API matches resting for this layout. Running Simulated Value Engine:")
             
             demo_fixtures = {
-                "🌍 FIFA World Cup / Qualifiers": {"home": "Brazil", "away": "Argentina", "odds": 2.10},
-                "🏆 UEFA Nations League": {"home": "France", "away": "England", "odds": 2.35},
-                "🌍 Africa Cup of Nations (AFCON)": {"home": "South Africa", "away": "Nigeria", "odds": 2.60},
-                "🏴󠁧󠁢󠁥󠁮󠁧󠁿 English Premier League": {"home": "Manchester City", "away": "Arsenal", "odds": 2.25},
-                "🇿🇦 South African PSL": {"home": "Mamelodi Sundowns", "away": "Orlando Pirates", "odds": 1.95},
-                "🏆 UEFA Champions League": {"home": "Real Madrid", "away": "Bayern Munich", "odds": 2.15}
+                "Global - FIFA World Cup and Qualifiers": {"home": "Brazil", "away": "Argentina", "odds": 2.10},
+                "Europe - UEFA Nations League": {"home": "France", "away": "England", "odds": 2.35},
+                "Africa - Africa Cup of Nations (AFCON)": {"home": "South Africa", "away": "Nigeria", "odds": 2.60},
+                "England - Premier League": {"home": "Manchester City", "away": "Arsenal", "odds": 2.25},
+                "South Africa - Premier Soccer League": {"home": "Mamelodi Sundowns", "away": "Orlando Pirates", "odds": 1.95},
+                "Europe - UEFA Champions League": {"home": "Real Madrid", "away": "Bayern Munich", "odds": 2.15}
             }
             
             default_fixture = demo_fixtures.get(selected_league_name, {"home": "Home Nations Elite", "away": "Away Nations Elite", "odds": 2.00})
@@ -83,7 +83,7 @@ if API_KEY:
             away_team = default_fixture["away"]
             bookie_odds = default_fixture["odds"]
             
-            st.warning(f"🤖 Simulated Match Active: {home_team} vs {away_team} (Live Bookmaker Benchmark Odds: {bookie_odds})")
+            st.warning(f"Simulated Match Active: {home_team} vs {away_team} (Live Bookmaker Benchmark Odds: {bookie_odds})")
         else:
             match_options = {}
             for match in live_matches:
@@ -105,19 +105,19 @@ if API_KEY:
                                 odds_list.append(float(outcome['price']))
             
             bookie_odds = max(odds_list) if odds_list else 2.00
-            st.success(f"⚡ Live Feed Sync Complete! Top Global Odds for {home_team} Win: {bookie_odds}")
+            st.success(f"Live Feed Sync Complete! Top Global Odds for {home_team} Win: {bookie_odds}")
             
     except Exception as e:
         st.error("Engine system reset. Loading system simulation benchmarks.")
         st.stop()
 else:
-    st.info("🔑 Paste your 'The Odds API' key to load all active worldwide matches automatically.")
+    st.info("Paste your The Odds API key to load all active worldwide matches automatically.")
     st.stop()
 
-# 4. WEATHER & MATCH DAY VARIABLES
+# 4. WEATHER AND MATCH DAY VARIABLES
 st.header("3. Configuration Conditions")
 col1, col2, col3 = st.columns(3)
-with col1: is_derby = st.checkbox("High-Intensity Rivalry / Derby")
+with col1: is_derby = st.checkbox("High-Intensity Rivalry or Derby")
 with col2: home_fatigue = st.checkbox(f"{home_team} Squad Fatigue")
 with col3: away_fatigue = st.checkbox(f"{away_team} Squad Fatigue")
 
@@ -148,9 +148,9 @@ is_worth_it = bookie_odds > fair_home_odds
 # 6. AUTOMATED VERDICT INTERFACE
 st.header("4. Value Assessment Output")
 if is_worth_it:
-    st.success(f"🚨 VERDICT: WORTH IT! The global odds offer a clear mathematical edge over the market.")
+    st.success("VERDICT: WORTH IT! The global odds offer a clear mathematical edge over the market.")
 else:
-    st.error("❌ VERDICT: NOT WORTH IT! Market margins are too small to justify the hazard risk.")
+    st.error("VERDICT: NOT WORTH IT! Market margins are too small to justify the hazard risk.")
 
 metric_col1, metric_col2, metric_col3 = st.columns(3)
 metric_col1.metric("Win Probability", f"{round(prob_home * 100, 1)}%")
@@ -158,12 +158,12 @@ metric_col2.metric("True Minimum Odds", f"{round(fair_home_odds, 2)}")
 metric_col3.metric("Edge Value Margin", f"{round(((bookie_odds/fair_home_odds)-1)*100, 1)}%" if is_worth_it else "0.0%")
 
 # 7. BUSINESS FREEMIUM GATEWAY CONTAINER
-st.header("🔥 Premium Statistical Predictions")
+st.header("Premium Statistical Predictions")
 if user_tier == "Free Tier":
-    st.warning("🔒 Exact Correct Score Line Matrices, BTTS Probability, and Kelly Criterion Stake Sizes are locked.")
-    st.info("💡 Business Hint to Premium Users: Upgrade your account plan via our Patreon checkout link to reveal precise wallet allocation layouts.")
+    st.warning("Exact Correct Score Line Matrices, BTTS Probability, and Kelly Criterion Stake Sizes are locked.")
+    st.info("Business Hint to Premium Users: Upgrade your account plan via our Patreon checkout link to reveal precise wallet allocation layouts.")
 else:
-    st.subheader("🎯 Premium Engine Dashboard Inclusions")
+    st.subheader("Premium Engine Dashboard Inclusions")
     b_frac = bookie_odds - 1
     raw_k = ((prob_home * bookie_odds) - 1) / b_frac if b_frac > 0 else 0
     kelly_pct = max(0.0, raw_k * 0.25)
@@ -176,4 +176,4 @@ else:
     st.write(f"**Alternative Market Selection: Over 2.5 Total Match Goals:** {round(prob_over25 * 100, 1)}%")
 
 st.markdown("---")
-st.caption("⚠️ Legal Disclaimer: This web application tracks mathematical calculations and data distributions. It does not provide legal financial betting advice. Winnings are never guaranteed. Users must comply with their local national gaming legislation. 18+ winners know when to stop.")
+st.caption("Legal Disclaimer: This web application tracks mathematical calculations and data distributions. It does not provide legal financial betting advice. Winnings are never guaranteed. Users must comply with their local national gaming legislation. 18+ winners know when to stop.")
