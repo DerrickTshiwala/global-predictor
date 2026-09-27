@@ -1,34 +1,32 @@
 import streamlit as st
 import requests
-import scipy.stats as stats
 import pandas as pd
-import os
+import scipy.stats as stats
 from datetime import datetime, timezone
 
-st.set_page_config(page_title='Universal Football Analytics Pro', layout='wide')
+st.set_page_config(page_title="Football Analytics Pro 3.0", layout="wide")
+
+st.title("Football Analytics Pro 3.0")
 
 TEAM_RATINGS = {
-    'Liverpool': 2.1,'Arsenal':2.0,'Manchester City':2.3,'Real Madrid':2.2,
-    'Bayern Munich':2.15,'Barcelona':2.0,'PSG':2.0,'Netherlands':1.95,
-    'England':2.05,'France':2.0,'Brazil':2.1,'Argentina':2.1
+    "Liverpool":2.1,"Arsenal":2.0,"Manchester City":2.3,
+    "Real Madrid":2.2,"Bayern Munich":2.15,"Barcelona":2.0,
+    "PSG":2.0,"England":2.05,"France":2.0,
+    "Brazil":2.1,"Argentina":2.1,"Netherlands":1.95
 }
 
-st.title('Universal Football Analytics Pro v2.0')
+leagues = {
+    "Premier League":"soccer_epl",
+    "Champions League":"soccer_uefa_champs_league",
+    "UEFA Nations League":"soccer_uefa_nations_league",
+    "La Liga":"soccer_spain_la_liga",
+    "South Africa PSL":"soccer_spl"
+}
 
-st.sidebar.header('Account')
-plan = st.sidebar.selectbox('Plan',['Free','Premium'])
-user_tier='Free'
-if plan=='Premium':
-    pw=st.sidebar.text_input('Premium Password',type='password')
-    if pw and pw==st.secrets.get('PREMIUM_PASSWORD',''):
-        user_tier='Premium'
-        st.sidebar.success('Premium Active')
-
-bankroll=st.sidebar.number_input('Bankroll',10.0,1000000.0,1000.0)
-api_key=st.text_input('Odds API Key',type='password')
-
-leagues={'Premier League':'soccer_epl','Champions League':'soccer_uefa_champs_league','UEFA Nations League':'soccer_uefa_nations_league','La Liga':'soccer_spain_la_liga'}
-league=st.selectbox('Competition',list(leagues.keys()))
+st.sidebar.header("Settings")
+api_key = st.sidebar.text_input("Odds API Key", type="password")
+bankroll = st.sidebar.number_input("Bankroll", min_value=10.0, value=1000.0)
+league = st.selectbox("Competition", list(leagues.keys()))
 
 matches=[]
 if api_key:
@@ -37,67 +35,77 @@ if api_key:
         r=requests.get(url,timeout=10)
         if r.status_code==200:
             matches=r.json()
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(str(e))
 
-st.header('Top Predictions Today')
-rank=[]
+st.header("Top Picks Scanner")
+rankings=[]
 for m in matches:
-    h=m['home_team']; a=m['away_team']
-    hr=TEAM_RATINGS.get(h,1.45); ar=TEAM_RATINGS.get(a,1.2)
-    ph=pdw=pa=0.0
-    for x in range(6):
-      for y in range(6):
-        p=stats.poisson.pmf(x,hr)*stats.poisson.pmf(y,ar)
-        if x>y: ph+=p
-        elif x==y: pdw+=p
+    home=m['home_team']; away=m['away_team']
+    hr=TEAM_RATINGS.get(home,1.45); ar=TEAM_RATINGS.get(away,1.20)
+    ph=pd=pa=0
+    for h in range(6):
+      for a in range(6):
+        p=stats.poisson.pmf(h,hr)*stats.poisson.pmf(a,ar)
+        if h>a: ph+=p
+        elif h==a: pd+=p
         else: pa+=p
     conf=min(100,round(abs(ph-pa)*100+50))
-    pick=h+' Win' if ph>max(pdw,pa) else (a+' Win' if pa>pdw else 'Draw')
-    rank.append({'Match':f'{h} vs {a}','Pick':pick,'Confidence':conf})
-if rank:
-    st.dataframe(pd.DataFrame(rank).sort_values('Confidence',ascending=False))
+    pick=home+" Win" if ph>max(pd,pa) else away+" Win" if pa>pd else "Draw"
+    risk='LOW' if conf>=85 else 'MEDIUM' if conf>=70 else 'HIGH'
+    verdict='APPROVED' if conf>=75 else 'NO BET'
+    rankings.append({'Match':f'{home} vs {away}','Pick':pick,'Confidence':conf,'Risk':risk,'Verdict':verdict})
+
+if rankings:
+    st.dataframe(pd.DataFrame(rankings).sort_values('Confidence',ascending=False),use_container_width=True)
 
 if matches:
-    opts={f"{m['home_team']} vs {m['away_team']}":m for m in matches}
-    sel=st.selectbox('Match Analysis',list(opts.keys()))
-    match=opts[sel]
-    home=match['home_team']; away=match['away_team']
+    options={f"{m['home_team']} vs {m['away_team']}":m for m in matches}
+    selected=st.selectbox('Match Analysis',list(options.keys()))
+    m=options[selected]
+    home=m['home_team']; away=m['away_team']
     hr=TEAM_RATINGS.get(home,1.45); ar=TEAM_RATINGS.get(away,1.2)
 
-    kickoff=match.get('commence_time')
-    if kickoff:
-        dt=datetime.fromisoformat(kickoff.replace('Z','+00:00'))
-        st.info(f'Kick Off: {dt}')
+    if m.get('commence_time'):
+        dt=datetime.fromisoformat(m['commence_time'].replace('Z','+00:00'))
+        st.info(f'Kick Off: {dt.strftime("%d %b %Y %H:%M UTC")}')
+        st.info(f'Countdown: {dt-datetime.now(timezone.utc)}')
 
-    ph=pdw=pa=btts=o25=0.0; scores=[]
-    for x in range(7):
-      for y in range(7):
-        p=stats.poisson.pmf(x,hr)*stats.poisson.pmf(y,ar)
-        scores.append((f'{x}-{y}',p))
-        if x>y: ph+=p
-        elif x==y: pdw+=p
+    ph=pdraw=pa=0.0
+    scores=[]
+    for h in range(7):
+      for a in range(7):
+        p=stats.poisson.pmf(h,hr)*stats.poisson.pmf(a,ar)
+        scores.append((f'{h}-{a}',p))
+        if h>a: ph+=p
+        elif h==a: pdraw+=p
         else: pa+=p
-        if x>0 and y>0: btts+=p
-        if x+y>2: o25+=p
 
-    scores.sort(key=lambda z:z[1],reverse=True)
-    confidence=min(100,round(abs(ph-pa)*100+50))
+    scores.sort(key=lambda x:x[1],reverse=True)
+    fair_home=1/ph if ph else 999
+    fair_draw=1/pdraw if pdraw else 999
+    fair_away=1/pa if pa else 999
 
     c1,c2,c3=st.columns(3)
     c1.metric('Home',f'{ph*100:.1f}%')
-    c2.metric('Draw',f'{pdw*100:.1f}%')
+    c2.metric('Draw',f'{pdraw*100:.1f}%')
     c3.metric('Away',f'{pa*100:.1f}%')
 
-    st.success(f'Best Pick: {home if ph>pa else away} Win')
+    confidence=min(100,round(abs(ph-pa)*100+50))
+    verdict='APPROVED âœ…' if confidence>=75 else 'NO BET âŒ'
+
+    st.subheader('Bet Verdict')
+    st.success(verdict)
     st.metric('Confidence',confidence)
+
+    st.subheader('Fair Odds')
+    f1,f2,f3=st.columns(3)
+    f1.metric('Home Fair',f'{fair_home:.2f}')
+    f2.metric('Draw Fair',f'{fair_draw:.2f}')
+    f3.metric('Away Fair',f'{fair_away:.2f}')
 
     st.subheader('Most Likely Scores')
     for s,p in scores[:5]:
-        st.write(f'{s} : {p*100:.2f}%')
+        st.write(f'{s}: {p*100:.2f}%')
 
-    if user_tier=='Premium':
-        st.subheader('Premium Analytics')
-        st.write(f'BTTS: {btts*100:.1f}%')
-        st.write(f'Over 2.5: {o25*100:.1f}%')
-        st.write(f'Suggested Stake: {bankroll*0.02:.2f}')
+st.caption('Probabilities are estimates only and are not guarantees of outcomes.')
