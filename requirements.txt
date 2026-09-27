@@ -1,5 +1,5 @@
-streamlit
-numpy
-scipy
-pandas
-requests
+streamlit>=1.40,<2.0
+requests>=2.32,<3.0
+pandas>=2.2,<3.0
+numpy>=1.26,<3.0
+scipy>=1.13,<2.0
