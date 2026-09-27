@@ -27,7 +27,7 @@ if user_tier_input == "Premium Member":
 
 user_bankroll = st.sidebar.number_input("Your Account Balance (any currency)", min_value=10.0, value=1000.0, step=10.0)
 
-# 2. DATA INGESTION: Massive Comprehensive Global & National Directory
+# 2. DATA INGESTION: Comprehensive Global Club & National Directory
 st.header("1. Select Live Global Feed")
 API_KEY = st.text_input("Enter Your Free The Odds API Key", value="45abb5e26fb108e9a81ca9570df8666d", type="password")
 
@@ -151,50 +151,55 @@ st.header("2. Choose Active Live Fixture")
 bookie_odds = 2.00
 home_team = ""
 away_team = ""
+live_matches = []
 
 if API_KEY:
     url = f"https://the-odds-api.com{selected_sport_key}/odds/?apiKey={API_KEY}&regions=uk,eu,us,au&markets=h2h&oddsFormat=decimal"
     try:
         res = requests.get(url)
-        live_matches = []
         if res.status_code == 200:
             live_matches = res.json()
-            
-        if len(live_matches) == 0:
-            st.info("Live API matches resting for this layout. Running Simulated Value Engine:")
-            
-            demo_fixtures = {
-                "Global - FIFA World Cup and Qualifiers": {"home": "Brazil", "away": "Argentina", "odds": 2.10},
-                "Europe - UEFA Nations League": {"home": "France", "away": "England", "odds": 2.35},
-                "Africa - Africa Cup of Nations (AFCON)": {"home": "South Africa", "away": "Nigeria", "odds": 2.60},
-                "England - Premier League": {"home": "Manchester City", "away": "Arsenal", "odds": 2.25},
-                "South Africa - Premier Soccer League": {"home": "Mamelodi Sundowns", "away": "Orlando Pirates", "odds": 1.95},
-                "Europe - UEFA Champions League": {"home": "Real Madrid", "away": "Bayern Munich", "odds": 2.15}
-            }
-            
-            default_fixture = demo_fixtures.get(selected_league_name, {"home": "Home Selection", "away": "Away Selection", "odds": 2.00})
-            home_team = default_fixture["home"]
-            away_team = default_fixture["away"]
-            bookie_odds = default_fixture["odds"]
-            
-            st.warning(f"Simulated Match Active: {home_team} vs {away_team} (Live Bookmaker Benchmark Odds: {bookie_odds})")
-        else:
-            match_options = {}
-            for match in live_matches:
-                display_label = f"{match['home_team']} vs {match['away_team']}"
-                match_options[display_label] = match
-                
-            selected_match_label = st.selectbox("Select Upcoming Match", list(match_options.keys()))
-            target_match = match_options[selected_match_label]
-            
-            home_team = target_match['home_team']
-            away_team = target_match['away_team']
-            
-            odds_list = []
-            for bookmaker in target_match.get('bookmakers', []):
-                for market in bookmaker.get('markets', []):
-                    if market['key'] == 'h2h':
-                        for outcome in market['outcomes']:
-                            if outcome['name'] == home_team:
-                                odds_list.append(float(outcome['price']))
-            
+    except Exception as e:
+        st.warning("API feed connection delay. Running fallback templates.")
+
+if len(live_matches) == 0:
+    st.info("Live API matches resting for this layout. Running Simulated Value Engine:")
+    demo_fixtures = {
+        "Global - FIFA World Cup and Qualifiers": {"home": "Brazil", "away": "Argentina", "odds": 2.10},
+        "Europe - UEFA Nations League": {"home": "France", "away": "England", "odds": 2.35},
+        "Africa - Africa Cup of Nations (AFCON)": {"home": "South Africa", "away": "Nigeria", "odds": 2.60},
+        "England - Premier League": {"home": "Manchester City", "away": "Arsenal", "odds": 2.25},
+        "South Africa - Premier Soccer League": {"home": "Mamelodi Sundowns", "away": "Orlando Pirates", "odds": 1.95},
+        "Europe - UEFA Champions League": {"home": "Real Madrid", "away": "Bayern Munich", "odds": 2.15}
+    }
+    default_fixture = demo_fixtures.get(selected_league_name, {"home": "Home Selection", "away": "Away Selection", "odds": 2.00})
+    home_team = default_fixture["home"]
+    away_team = default_fixture["away"]
+    bookie_odds = default_fixture["odds"]
+    st.warning(f"Simulated Match Active: {home_team} vs {away_team} (Live Bookmaker Benchmark Odds: {bookie_odds})")
+else:
+    match_options = {}
+    for match in live_matches:
+        display_label = f"{match['home_team']} vs {match['away_team']}"
+        match_options[display_label] = match
+        
+    selected_match_label = st.selectbox("Select Upcoming Match", list(match_options.keys()))
+    target_match = match_options[selected_match_label]
+    home_team = target_match['home_team']
+    away_team = target_match['away_team']
+    
+    odds_list = []
+    for bookmaker in target_match.get('bookmakers', []):
+        for market in bookmaker.get('markets', []):
+            if market['key'] == 'h2h':
+                for outcome in market['outcomes']:
+                    if outcome['name'] == home_team:
+                        odds_list.append(float(outcome['price']))
+    
+    bookie_odds = max(odds_list) if odds_list else 2.00
+    st.success(f"Live Feed Sync Complete! Top Global Odds for {home_team} Win: {bookie_odds}")
+
+# 4. WEATHER AND MATCH DAY VARIABLES
+st.header("3. Configuration Conditions")
+col1, col2, col3 = st.columns(3)
+with col1: is_derby = st.checkbox("High-Intensity Rivalry or Derby")with col2: home_fatigue = st.checkbox(f"{home_team} Squad Fatigue")with col3: away_fatigue = st.checkbox(f"{away_team} Squad Fatigue")5. POISSON COMPUTATIONAL INTELLIGENCE MATRIXbase_home_xg = 1.45 * (0.85 if is_derby else 1.0) * (0.90 if home_fatigue else 1.0)base_away_xg = 1.20 * (1.15 if is_derby else 1.0) * (0.90 if away_fatigue else 1.0)prob_home, prob_draw, prob_away = 0.0, 0.0, 0.0prob_btts, prob_over25 = 0.0, 0.0max_g = 6for h in range(max_g):for a in range(max_g):p_h = stats.poisson.pmf(h, base_home_xg)p_a = stats.poisson.pmf(a, base_away_xg)j_p = p_h * p_aif h > a: prob_home += j_pelif h == a: prob_draw += j_pelse: prob_away += j_pif h > 0 and a > 0: prob_btts += j_pif (h + a) > 2.5: prob_over25 += j_pfair_home_odds = 1 / prob_home if prob_home > 0 else 999.0is_worth_it = bookie_odds > fair_home_odds6. AUTOMATED VERDICT INTERFACEst.header("4. Value Assessment Output")if is_worth_it:st.success("VERDICT: WORTH IT! The global odds offer a clear mathematical edge over the market.")else:st.error("VERDICT: NOT WORTH IT! Market margins are too small to justify the hazard risk.")metric_col1, metric_col2, metric_col3 = st.columns(3)metric_col1.metric("Win Probability", f"{round(prob_home * 100, 1)}%")metric_col2.metric("True Minimum Odds", f"{round(fair_home_odds, 2)}")metric_col3.metric("Edge Value Margin", f"{round(((bookie_odds/fair_home_odds)-1)*100, 1)}%" if is_worth_it else "0.0%")7. BUSINESS FREEMIUM GATEWAY CONTAINERst.header("Premium Statistical Predictions")if user_tier == "Free Tier":st.warning("Exact Correct Score Line Matrices, BTTS Probability, and Kelly Criterion Stake Sizes are locked.")st.info("Business Hint to Premium Users: Upgrade your account plan via our Patreon checkout link to reveal precise wallet allocation layouts.")else:st.subheader("Premium Engine Dashboard Inclusions")b_frac = bookie_odds - 1raw_k = ((prob_home * bookie_odds) - 1) / b_frac if b_frac > 0 else 0kelly_pct = max(0.0, raw_k * 0.25)col_p1, col_p2 = st.columns(2)col_p1.metric("Kelly Stake Size Allocation", f"{round(kelly_pct * 100, 2)}%")col_p2.metric("Recommended Stake Value", f"${round(user_bankroll * kelly_pct, 2)}")st.write(f"Alternative Market Selection: Both Teams to Score (BTTS): {round(prob_btts * 100, 1)}%")st.write(f"Alternative Market Selection: Over 2.5 Total Match Goals: {round(prob_over25 * 100, 1)}%")st.markdown("---")st.caption("Legal Disclaimer: This web application tracks mathematical calculations and data distributions. It does not provide legal financial betting advice. Winnings are never guaranteed. Users must comply with their local national gaming legislation. 18+ winners know when to stop.")
