@@ -85,7 +85,7 @@ selected_league_name = st.selectbox(
 selected_sport_key = global_leagues_directory[selected_league_name]
 
 # --------------------------------------------------
-# FIXTURE LOADER
+# LIVE FIXTURES
 # --------------------------------------------------
 
 st.header("2. Choose Active Live Fixture")
@@ -113,22 +113,20 @@ if API_KEY:
             live_matches = response.json()
         else:
             st.warning(
-                f"API returned status code {response.status_code}."
+                f"API returned status code {response.status_code}"
             )
 
     except Exception as e:
-        st.warning(
-            f"API connection problem: {e}"
-        )
+        st.warning(f"API connection error: {e}")
 
 # --------------------------------------------------
-# DEMO FIXTURES
+# FALLBACK DEMO DATA
 # --------------------------------------------------
 
-if len(live_matches) == 0:
+if not live_matches:
 
     st.info(
-        "No live fixtures detected. Running demo value engine."
+        "No live fixtures available. Running demo value engine."
     )
 
     demo_fixtures = {
@@ -173,7 +171,7 @@ if len(live_matches) == 0:
     bookie_odds = fixture["odds"]
 
     st.warning(
-        f"Simulated Match: {home_team} vs {away_team}"
+        f"Simulated Match Active: {home_team} vs {away_team}"
     )
 
 else:
@@ -181,10 +179,7 @@ else:
     match_options = {}
 
     for match in live_matches:
-        label = (
-            f"{match['home_team']} vs "
-            f"{match['away_team']}"
-        )
+        label = f"{match['home_team']} vs {match['away_team']}"
         match_options[label] = match
 
     selected_match_label = st.selectbox(
@@ -202,20 +197,20 @@ else:
     for bookmaker in target_match.get("bookmakers", []):
         for market in bookmaker.get("markets", []):
 
-            if market["key"] == "h2h":
+            if market.get("key") == "h2h":
 
-                for outcome in market["outcomes"\]:
+                for outcome in market.get("outcomes", []):
 
-                    if outcome["name"] == home_team:
+                    if outcome.get("name") == home_team:
                         odds_list.append(
-                            float(outcome["price"])
+                            float(outcome.get("price", 0))
                         )
 
-    bookie_odds = max(odds_list) if odds_list else 2.00
+    if odds_list:
+        bookie_odds = max(odds_list)
 
     st.success(
-        f"Live Feed Ready. Best odds for "
-        f"{home_team}: {bookie_odds}"
+        f"Live Feed Ready. Best Home Win Odds: {bookie_odds}"
     )
 
 # --------------------------------------------------
@@ -253,7 +248,7 @@ base_home_xg = (
 
 base_away_xg = (
     1.20
-    * (1.15 if is_derby else 10)
+    * (1.15 if is_derby else 1.0)
     * (0.90 if away_fatigue else 1.0)
 )
 
@@ -287,7 +282,9 @@ for h in range(max_goals):
             prob_over25 += joint_prob
 
 fair_home_odds = (
-    1 / prob_home if prob_home > 0 else 999.0
+    1 / prob_home
+    if prob_home > 0
+    else 999.0
 )
 
 is_worth_it = bookie_odds > fair_home_odds
@@ -300,21 +297,21 @@ st.header("4. Value Assessment Output")
 
 if is_worth_it:
     st.success(
-        "VERDICT: WORTH IT! Mathematical edge detected."
+        "VERDICT: WORTH IT! Mathematical value edge detected."
     )
 else:
     st.error(
-        "VERDICT: NOT WORTH IT! No clear value edge."
+        "VERDICT: NOT WORTH IT! No significant edge detected."
     )
 
-c1, c2, c3 = st.columns(3)
+col1, col2, col3 = st.columns(3)
 
-c1.metric(
+col1.metric(
     "Win Probability",
     f"{prob_home * 100:.1f}%"
 )
 
-c2.metric(
+col2.metric(
     "Fair Odds",
     f"{fair_home_odds:.2f}"
 )
@@ -325,7 +322,7 @@ edge = (
     else 0
 )
 
-c3.metric(
+col3.metric(
     "Value Edge",
     f"{edge:.1f}%"
 )
@@ -339,18 +336,16 @@ st.header("Premium Statistical Predictions")
 if user_tier == "Free Tier":
 
     st.warning(
-        "Correct Score, BTTS probabilities and Kelly staking are locked."
+        "Correct scores, BTTS probabilities and Kelly staking are locked."
     )
 
     st.info(
-        "Upgrade to Premium for advanced analytics."
+        "Upgrade to Premium to unlock advanced analytics."
     )
 
 else:
 
-    st.subheader(
-        "Premium Engine Dashboard"
-    )
+    st.subheader("Premium Engine Dashboard")
 
     b = bookie_odds - 1
 
@@ -365,7 +360,7 @@ else:
     p1, p2 = st.columns(2)
 
     p1.metric(
-        "Kelly %",
+        "Kelly Percentage",
         f"{kelly_pct * 100:.2f}%"
     )
 
@@ -375,13 +370,11 @@ else:
     )
 
     st.write(
-        f"BTTS Probability: "
-        f"{prob_btts * 100:.1f}%"
+        f"BTTS Probability: {prob_btts * 100:.1f}%"
     )
 
     st.write(
-        f"Over 2.5 Goals Probability: "
-        f"{prob_over25 * 100:.1f}%"
+        f"Over 2.5 Goals Probability: {prob_over25 * 100:.1f}%"
     )
 
 # --------------------------------------------------
@@ -392,6 +385,6 @@ st.markdown("---")
 
 st.caption(
     "Legal Disclaimer: This application provides "
-    "mathematical modelling and probability estimates. "
-    "It is not financial advice and does not guarantee outcomes."
+    "mathematical modelling and probability estimates only. "
+    "It is not financial advice and does not guarantee results."
 )
