@@ -27,25 +27,27 @@ if user_tier_input == "Premium Member":
 
 user_bankroll = st.sidebar.number_input("Your Account Balance (any currency)", min_value=10.0, value=1000.0, step=10.0)
 
-# 2. DATA INGESTION: Global League Directory
-st.header("1. Select Live Global League Feed")
+# 2. DATA INGESTION: Comprehensive Global Club & National Teams Directory
+st.header("1. Select Live Global Feed")
 API_KEY = st.text_input("Enter Your Free 'The Odds API' Key", value="45abb5e26fb108e9a81ca9570df8666d", type="password")
 
+# Complete directory mapping out every global market category, explicitly adding International Tiers
 global_leagues_directory = {
-    "English Premier League": "soccer_epl",
-    "UEFA Champions League": "soccer_uefa_champs_league",
-    "UEFA Europa League": "soccer_uefa_europa_league",
-    "Spanish La Liga": "soccer_spain_la_liga",
-    "Italian Serie A": "soccer_italy_serie_a",
-    "German Bundesliga": "soccer_germany_bundesliga",
-    "French Ligue 1": "soccer_france_ligue_one",
-    "Dutch Eredivisie": "soccer_netherlands_eredivisie",
-    "Portuguese Primeira Liga": "soccer_portugal_primeira_liga",
-    "English Championship": "soccer_efl_champ",
-    "Major League Soccer (MLS)": "soccer_usa_mls",
-    "Australian A-League": "soccer_australia_aleague",
-    "Brazilian Serie A": "soccer_brazil_campeonato",
-    "Mexican Liga MX": "soccer_mexico_ligamx"
+    "🌍 FIFA World Cup / Qualifiers": "soccer_fifa_world_cup",
+    "🏆 UEFA Nations League": "soccer_uefa_nations_league",
+    "🌍 Africa Cup of Nations (AFCON)": "soccer_afcon",
+    "🏆 UEFA Champions League": "soccer_uefa_champs_league",
+    "🏴󠁧󠁢󠁥󠁮󠁧󠁿 English Premier League": "soccer_epl",
+    "🇿🇦 South African PSL": "soccer_spl",
+    "🇪🇸 Spanish La Liga": "soccer_spain_la_liga",
+    "🇮🇹 Italian Serie A": "soccer_italy_serie_a",
+    "🇩🇪 German Bundesliga": "soccer_germany_bundesliga",
+    "🇫🇷 French Ligue 1": "soccer_france_ligue_one",
+    "🇪🇺 UEFA Europa League": "soccer_uefa_europa_league",
+    "🇺🇸 Major League Soccer (MLS)": "soccer_usa_mls",
+    "🇦🇺 Australian A-League": "soccer_australia_aleague",
+    "🇧🇷 Brazilian Serie A": "soccer_brazil_campeonato",
+    "🇲🇽 Mexican Liga MX": "soccer_mexico_ligamx"
 }
 
 selected_league_name = st.selectbox("Choose Competition Venue", list(global_leagues_directory.keys()))
@@ -57,8 +59,8 @@ bookie_odds = 2.00
 home_team = ""
 away_team = ""
 
-# Expanded regions query (us, uk, eu, au) ensures a bookmaker response is found globally
 if API_KEY:
+    # Querying deep feeds ensures all continental bookmaker lists populate
     url = f"https://the-odds-api.com{selected_sport_key}/odds/?apiKey={API_KEY}&regions=uk,eu,us,au&markets=h2h&oddsFormat=decimal"
     try:
         res = requests.get(url)
@@ -66,21 +68,20 @@ if API_KEY:
         if res.status_code == 200:
             live_matches = res.json()
             
-        # Fail-Safe Engine: If live API lists no games, run simulated match templates instantly
+        # Fail-Safe Engine: Handles off-season or live schedule gaps seamlessly
         if len(live_matches) == 0:
             st.info("ℹ️ Live API matches resting for this layout. Running Simulated Value Engine:")
             
-            # Simulated Fixture Database customized for Betway / Hollywoodbets profiles
             demo_fixtures = {
-                "English Premier League": {"home": "Manchester City", "away": "Arsenal", "odds": 2.25},
-                "UEFA Champions League": {"home": "Real Madrid", "away": "Bayern Munich", "odds": 1.95},
-                "Spanish La Liga": {"home": "Barcelona", "away": "Atletico Madrid", "odds": 2.10},
-                "Italian Serie A": {"home": "Juventus", "away": "AC Milan", "odds": 2.40},
-                "German Bundesliga": {"home": "Dortmund", "away": "Bayer Leverkusen", "odds": 2.30},
-                "French Ligue 1": {"home": "PSG", "away": "Marseille", "odds": 1.55}
+                "🌍 FIFA World Cup / Qualifiers": {"home": "Brazil", "away": "Argentina", "odds": 2.10},
+                "🏆 UEFA Nations League": {"home": "France", "away": "England", "odds": 2.35},
+                "🌍 Africa Cup of Nations (AFCON)": {"home": "South Africa", "away": "Nigeria", "odds": 2.60},
+                "🏴󠁧󠁢󠁥󠁮󠁧󠁿 English Premier League": {"home": "Manchester City", "away": "Arsenal", "odds": 2.25},
+                "🇿🇦 South African PSL": {"home": "Mamelodi Sundowns", "away": "Orlando Pirates", "odds": 1.95},
+                "🏆 UEFA Champions League": {"home": "Real Madrid", "away": "Bayern Munich", "odds": 2.15}
             }
             
-            default_fixture = demo_fixtures.get(selected_league_name, {"home": "Home Team Elite", "away": "Away Team Elite", "odds": 2.00})
+            default_fixture = demo_fixtures.get(selected_league_name, {"home": "Home Nations Elite", "away": "Away Nations Elite", "odds": 2.00})
             home_team = default_fixture["home"]
             away_team = default_fixture["away"]
             bookie_odds = default_fixture["odds"]
@@ -119,7 +120,7 @@ else:
 # 4. WEATHER & MATCH DAY VARIABLES
 st.header("3. Configuration Conditions")
 col1, col2, col3 = st.columns(3)
-with col1: is_derby = st.checkbox("Local Derby Rivalry")
+with col1: is_derby = st.checkbox("High-Intensity Rivalry / Derby")
 with col2: home_fatigue = st.checkbox(f"{home_team} Squad Fatigue")
 with col3: away_fatigue = st.checkbox(f"{away_team} Squad Fatigue")
 
