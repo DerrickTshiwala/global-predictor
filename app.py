@@ -1,7 +1,6 @@
-import os
-import math
-import sqlite3
+import math, re, sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -9,2893 +8,401 @@ import requests
 import streamlit as st
 from scipy.stats import poisson
 
-
-# ============================================================
-# FOOTBALL INTELLIGENCE PLATFORM v5.0
-# Data -> Ratings -> Probabilities -> Value -> Archive -> Results
-# ============================================================
-
-st.set_page_config(
-    page_title="Football Intelligence Platform v5.0",
-    page_icon="⚽",
-    layout="wide",
-)
-
-DB_PATH = os.getenv("FOOTBALL_DB_PATH", "football_intelligence.db")
-
-ODDS_BASE = "https://api.the-odds-api.com/v4"
-
-
-# ============================================================
-# COMPETITIONS
-# ============================================================
-
-LEAGUES = {
-    "Premier League": "soccer_epl",
-    "Champions League": "soccer_uefa_champs_league",
-    "UEFA Nations League": "soccer_uefa_nations_league",
-    "La Liga": "soccer_spain_la_liga",
-    "Bundesliga": "soccer_germany_bundesliga",
-    "Serie A": "soccer_italy_serie_a",
-    "Ligue 1": "soccer_france_ligue_one",
-    "Eredivisie": "soccer_netherlands_eredivisie",
-    "MLS": "soccer_usa_mls",
-    "Brazil Serie A": "soccer_brazil_campeonato",
-    "Mexico Liga MX": "soccer_mexico_ligamx",
-    "South Africa PSL": "soccer_spl",
-    "AFCON": "soccer_afcon",
-    "Egypt Premier League": "soccer_egyptian_premier_league",
-    "Morocco Botola": "soccer_morocco_botola",
-    "Nigeria NPFL": "soccer_nigeria_npfl",
-    "Ghana Premier League": "soccer_ghana_npfl",
-    "Kenya Premier League": "soccer_kenya_premier_league",
-    "Tanzania Premier League": "soccer_tanzania_premier_league",
-    "Zambia Super League": "soccer_zambia_super_league",
-    "DR Congo Linafoot": "soccer_congo_dr_linafoot",
-}
-
-
-# ============================================================
-# CSV COLUMN SUPPORT
-# ============================================================
-
-COLUMN_ALIASES = {
-    "date": [
-        "date",
-        "Date",
-        "match_date",
-        "MatchDate",
-    ],
-    "home_team": [
-        "home_team",
-        "HomeTeam",
-        "home",
-        "Home",
-    ],
-    "away_team": [
-        "away_team",
-        "AwayTeam",
-        "away",
-        "Away",
-    ],
-    "home_goals": [
-        "home_goals",
-        "FTHG",
-        "HG",
-        "home_score",
-        "HomeGoals",
-    ],
-    "away_goals": [
-        "away_goals",
-        "FTAG",
-        "AG",
-        "away_score",
-        "AwayGoals",
-    ],
-    "league": [
-        "league",
-        "League",
-        "competition",
-        "Competition",
-    ],
-    "home_odds": [
-        "home_odds",
-        "B365H",
-        "AvgH",
-        "MaxH",
-        "home_price",
-    ],
-    "draw_odds": [
-        "draw_odds",
-        "B365D",
-        "AvgD",
-        "MaxD",
-        "draw_price",
-    ],
-    "away_odds": [
-        "away_odds",
-        "B365A",
-        "AvgA",
-        "MaxA",
-        "away_price",
-    ],
-}
-
-
-# ============================================================
-# GENERAL HELPERS
-# ============================================================
-
-def utc_now():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def normalize_team(name):
-    if not isinstance(name, str):
-        return ""
-
-    return " ".join(name.strip().split())
-
-
-def get_api_key():
-    """
-    Priority:
-    1. Streamlit Secrets
-    2. Environment variable
-    """
-
-    try:
-        secret_key = st.secrets.get("ODDS_API_KEY", "")
-    except Exception:
-        secret_key = ""
-
-    return secret_key or os.getenv("ODDS_API_KEY", "")
-
-
-@st.cache_resource
-def get_connection():
-    conn = sqlite3.connect(
-        DB_PATH,
-        check_same_thread=False,
-    )
-
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-
-    init_db(conn)
-
-    return conn
-
-
-def init_db(conn):
-
-    conn.executescript(
-        """
-
-        CREATE TABLE IF NOT EXISTS historical_matches (
-
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            match_date TEXT NOT NULL,
-
-            league TEXT NOT NULL DEFAULT '',
-
-            home_team TEXT NOT NULL,
-
-            away_team TEXT NOT NULL,
-
-            home_goals INTEGER NOT NULL,
-
-            away_goals INTEGER NOT NULL,
-
-            home_odds REAL,
-
-            draw_odds REAL,
-
-            away_odds REAL,
-
-            source TEXT NOT NULL DEFAULT 'manual',
-
-            created_at TEXT NOT NULL,
-
-            UNIQUE(
-                match_date,
-                league,
-                home_team,
-                away_team
-            )
-        );
-
-
-        CREATE TABLE IF NOT EXISTS predictions (
-
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            event_id TEXT,
-
-            created_at TEXT NOT NULL,
-
-            commence_time TEXT,
-
-            league TEXT,
-
-            home_team TEXT,
-
-            away_team TEXT,
-
-            prediction TEXT,
-
-            market TEXT NOT NULL DEFAULT '1X2',
-
-            confidence REAL,
-
-            verdict TEXT,
-
-            model_probability REAL,
-
-            implied_probability REAL,
-
-            edge REAL,
-
-            odds REAL,
-
-            expected_value REAL,
-
-            home_xg REAL,
-
-            away_xg REAL,
-
-            home_elo REAL,
-
-            away_elo REAL,
-
-            form_home REAL,
-
-            form_away REAL,
-
-            status TEXT NOT NULL DEFAULT 'PENDING',
-
-            actual_result TEXT,
-
-            home_goals INTEGER,
-
-            away_goals INTEGER,
-
-            profit_loss REAL
-        );
-
-
-        CREATE INDEX IF NOT EXISTS idx_predictions_event
-        ON predictions(event_id);
-
-
-        CREATE INDEX IF NOT EXISTS idx_predictions_status
-        ON predictions(status);
-
-
-        CREATE INDEX IF NOT EXISTS idx_history_teams
-        ON historical_matches(home_team, away_team);
-
-
-        CREATE INDEX IF NOT EXISTS idx_history_date
-        ON historical_matches(match_date);
-
-
-        CREATE TABLE IF NOT EXISTS team_ratings (
-
-            team TEXT PRIMARY KEY,
-
-            elo REAL NOT NULL DEFAULT 1500,
-
-            attack REAL NOT NULL DEFAULT 1.35,
-
-            defence REAL NOT NULL DEFAULT 1.35,
-
-            matches INTEGER NOT NULL DEFAULT 0,
-
-            updated_at TEXT NOT NULL
-        );
-
-        """
-    )
-
-    conn.commit()
-
-
-def qdf(conn, sql, params=()):
-    return pd.read_sql_query(
-        sql,
-        conn,
-        params=params,
-    )
-
-
-def scalar(
-    conn,
-    sql,
-    params=(),
-    default=0,
-):
-
-    row = conn.execute(
-        sql,
-        params,
-    ).fetchone()
-
-    if row is None or row[0] is None:
-        return default
-
-    return row[0]
-
-
-# ============================================================
-# HISTORICAL CSV
-# ============================================================
-
-def find_column(df, aliases):
-
-    lower = {
-        str(c).strip().lower(): c
-        for c in df.columns
-    }
-
-    for alias in aliases:
-
-        if alias.lower() in lower:
-            return lower[alias.lower()]
-
-    return None
-
-
-def prepare_history_csv(
-    uploaded_file,
-    default_league,
-):
-
-    raw = pd.read_csv(uploaded_file)
-
-    mapped = {}
-
-    for key, aliases in COLUMN_ALIASES.items():
-
-        col = find_column(
-            raw,
-            aliases,
-        )
-
-        if col:
-            mapped[key] = col
-
-    required = [
-        "date",
-        "home_team",
-        "away_team",
-        "home_goals",
-        "away_goals",
-    ]
-
-    missing = [
-        x
-        for x in required
-        if x not in mapped
-    ]
-
-    if missing:
-
-        raise ValueError(
-            "CSV is missing required columns: "
-            + ", ".join(missing)
-            + ". Supported examples: "
-            + "Date, HomeTeam, AwayTeam, FTHG, FTAG."
-        )
-
-    out = pd.DataFrame()
-
-    out["match_date"] = pd.to_datetime(
-        raw[mapped["date"]],
-        dayfirst=True,
-        errors="coerce",
-    )
-
-    out["home_team"] = raw[
-        mapped["home_team"]
-    ].map(normalize_team)
-
-    out["away_team"] = raw[
-        mapped["away_team"]
-    ].map(normalize_team)
-
-    out["home_goals"] = pd.to_numeric(
-        raw[mapped["home_goals"]],
-        errors="coerce",
-    )
-
-    out["away_goals"] = pd.to_numeric(
-        raw[mapped["away_goals"]],
-        errors="coerce",
-    )
-
-    if "league" in mapped:
-
-        out["league"] = (
-            raw[mapped["league"]]
-            .fillna("")
-            .astype(str)
-        )
-
-    else:
-
-        out["league"] = default_league
-
-    for key in [
-        "home_odds",
-        "draw_odds",
-        "away_odds",
-    ]:
-
-        if key in mapped:
-
-            out[key] = pd.to_numeric(
-                raw[mapped[key]],
-                errors="coerce",
-            )
-
-        else:
-
-            out[key] = np.nan
-
-    out = out.dropna(
-        subset=[
-            "match_date",
-            "home_team",
-            "away_team",
-            "home_goals",
-            "away_goals",
-        ]
-    )
-
-    out["home_goals"] = out[
-        "home_goals"
-    ].astype(int)
-
-    out["away_goals"] = out[
-        "away_goals"
-    ].astype(int)
-
-    out["match_date"] = (
-        out["match_date"]
-        .dt.strftime("%Y-%m-%d")
-    )
-
-    out = out[
-        out["home_team"] != ""
-    ]
-
-    out = out[
-        out["away_team"] != ""
-    ]
-
+APP_VERSION = "6.0"
+DB = "football_intelligence.db"
+ODDS = "https://api.the-odds-api.com/v4"
+OF_RAW = "https://raw.githubusercontent.com/openfootball/football.json/master"
+OF_TREE = "https://api.github.com/repos/openfootball/football.json/git/trees/master?recursive=1"
+
+st.set_page_config(page_title=f"Football Intelligence v{APP_VERSION}", layout="wide")
+
+# ---------- database ----------
+def conn():
+    c = sqlite3.connect(DB, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    return c
+
+def init_db():
+    c = conn()
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS historical_matches(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL,
+      source_key TEXT NOT NULL UNIQUE, match_date TEXT NOT NULL,
+      competition TEXT, season TEXT, home_team TEXT NOT NULL,
+      away_team TEXT NOT NULL, home_goals INTEGER NOT NULL,
+      away_goals INTEGER NOT NULL, round_name TEXT, imported_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS predictions(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, prediction_time TEXT NOT NULL,
+      event_id TEXT, sport_key TEXT, competition TEXT, commence_time TEXT,
+      home_team TEXT NOT NULL, away_team TEXT NOT NULL,
+      p_home REAL NOT NULL, p_draw REAL NOT NULL, p_away REAL NOT NULL,
+      pick TEXT NOT NULL, model_odds REAL, market_odds REAL,
+      edge REAL, ev REAL, verdict TEXT NOT NULL, model_version TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'OPEN', actual_result TEXT, profit_units REAL,
+      UNIQUE(event_id,prediction_time));
+    CREATE TABLE IF NOT EXISTS odds_snapshots(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, captured_at TEXT NOT NULL,
+      event_id TEXT NOT NULL, sport_key TEXT, competition TEXT,
+      commence_time TEXT, home_team TEXT, away_team TEXT, bookmaker TEXT,
+      market TEXT, outcome TEXT, price REAL,
+      UNIQUE(captured_at,event_id,bookmaker,market,outcome));
+    CREATE INDEX IF NOT EXISTS ix_hist_date ON historical_matches(match_date);
+    CREATE INDEX IF NOT EXISTS ix_pred_status ON predictions(status);
+    CREATE INDEX IF NOT EXISTS ix_odds_event ON odds_snapshots(event_id);
+    """)
+    c.commit(); c.close()
+
+init_db()
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+def team_key(x):
+    x = str(x or "").lower().strip()
+    x = re.sub(r"\b(fc|afc|cf|sc|ac|fk|sk|sv|bv|ud|cd|ca|club|football|futbol)\b", " ", x)
+    x = re.sub(r"[^a-z0-9]+", " ", x)
+    return re.sub(r"\s+", " ", x).strip()
+
+def result(h,a):
+    return "H" if h>a else "D" if h==a else "A"
+
+def probs(lh,la):
+    p=np.zeros(3)
+    for h in range(9):
+        for a in range(9):
+            q=poisson.pmf(h,lh)*poisson.pmf(a,la)
+            p[0 if h>a else 1 if h==a else 2]+=q
+    return p/p.sum()
+
+def pick(p):
+    return ("HOME","DRAW","AWAY")[int(np.argmax(p))]
+
+def fair(p):
+    return 1/p if p>0 else np.nan
+
+def ev(p,odds):
+    return p*odds-1 if odds and odds>1 else np.nan
+
+# ---------- Odds API: discover real keys, never hard-code them ----------
+@st.cache_data(ttl=3600, show_spinner=False)
+def sports(api_key):
+    r=requests.get(f"{ODDS}/sports",params={"apiKey":api_key},timeout=25)
+    if r.status_code!=200: raise RuntimeError(f"Sports API {r.status_code}: {r.text[:500]}")
+    return r.json()
+
+def soccer(api_key):
+    return [x for x in sports(api_key) if str(x.get("group","")).lower()=="soccer"]
+
+def live_odds(api_key,sport):
+    r=requests.get(f"{ODDS}/sports/{sport}/odds",
+        params={"apiKey":api_key,"regions":"eu,uk","markets":"h2h","oddsFormat":"decimal"},timeout=25)
+    if r.status_code!=200: raise RuntimeError(f"Odds API {r.status_code}: {r.text[:700]}")
+    return r.json(),dict(r.headers)
+
+def market(event):
+    out={"HOME":[],"DRAW":[],"AWAY":[]}
+    for b in event.get("bookmakers",[]):
+        for m in b.get("markets",[]):
+            if m.get("key")!="h2h": continue
+            for o in m.get("outcomes",[]):
+                n=o.get("name"); v=float(o.get("price",0) or 0)
+                k="HOME" if n==event.get("home_team") else "AWAY" if n==event.get("away_team") else "DRAW" if str(n).lower()=="draw" else None
+                if k: out[k].append((b.get("key",""),v))
     return out
 
+def best_odds(event):
+    m=market(event)
+    return {k:max(v,key=lambda x:x[1])[1] for k,v in m.items() if v}
 
-def import_history(
-    conn,
-    df,
-    source="CSV",
-):
+def save_snapshots(events,sport):
+    c=conn(); ts=now()
+    rows=[]
+    for e in events:
+        for b in e.get("bookmakers",[]):
+            for m in b.get("markets",[]):
+                if m.get("key")!="h2h": continue
+                for o in m.get("outcomes",[]):
+                    rows.append((ts,e.get("id"),sport,e.get("sport_title"),e.get("commence_time"),
+                                 e.get("home_team"),e.get("away_team"),b.get("key"),"h2h",o.get("name"),o.get("price")))
+    c.executemany("""INSERT OR IGNORE INTO odds_snapshots
+      (captured_at,event_id,sport_key,competition,commence_time,home_team,away_team,
+       bookmaker,market,outcome,price) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",rows)
+    c.commit(); c.close()
 
-    inserted = 0
-    skipped = 0
+# ---------- free public-domain historical results ----------
+@st.cache_data(ttl=86400, show_spinner=False)
+def openfootball_paths():
+    r=requests.get(OF_TREE,timeout=35,headers={"User-Agent":"Football-Intelligence/6.0"})
+    if r.status_code!=200: raise RuntimeError(f"OpenFootball discovery {r.status_code}: {r.text[:400]}")
+    return [x["path"] for x in r.json().get("tree",[])
+            if x.get("type")=="blob" and x["path"].endswith(".json")
+            and re.search(r"/\d{4}(-\d{2})?/",x["path"])]
 
-    for _, r in df.iterrows():
+def season_from_path(p):
+    for x in p.split("/"):
+        if re.fullmatch(r"\d{4}(-\d{2})?",x): return x
+    return ""
 
+def parse_match(m,competition,season,path):
+    s=m.get("score",{})
+    ft=s.get("ft") if isinstance(s,dict) else s if isinstance(s,list) else None
+    if not isinstance(ft,list) or len(ft)<2: return None
+    try: hg,ag=int(ft[0]),int(ft[1])
+    except: return None
+    d=str(m.get("date",""))[:10]
+    h,a=m.get("team1"),m.get("team2")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}",d) or not h or not a: return None
+    key=f"openfootball:{path}|{d}|{team_key(h)}|{team_key(a)}|{hg}-{ag}"
+    return ("openfootball",key,d,competition,season,str(h).strip(),str(a).strip(),hg,ag,m.get("round"),now())
+
+def import_history(seasons_back=6,max_files=150):
+    current=datetime.now().year
+    paths=[]
+    for p in openfootball_paths():
+        s=season_from_path(p)
+        y=int(s[:4]) if s else 0
+        if y>=current-seasons_back-1: paths.append(p)
+    paths=sorted(paths)[:max_files]
+    c=conn(); files=0; rows=0; errors=[]
+    for p in paths:
         try:
-
-            conn.execute(
-                """
-
-                INSERT OR IGNORE INTO historical_matches
-
-                (
-                    match_date,
-                    league,
-                    home_team,
-                    away_team,
-                    home_goals,
-                    away_goals,
-                    home_odds,
-                    draw_odds,
-                    away_odds,
-                    source,
-                    created_at
-                )
-
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-                """,
-                (
-                    str(r["match_date"]),
-                    str(r["league"]),
-                    normalize_team(
-                        r["home_team"]
-                    ),
-                    normalize_team(
-                        r["away_team"]
-                    ),
-                    int(r["home_goals"]),
-                    int(r["away_goals"]),
-                    None
-                    if pd.isna(r["home_odds"])
-                    else float(r["home_odds"]),
-                    None
-                    if pd.isna(r["draw_odds"])
-                    else float(r["draw_odds"]),
-                    None
-                    if pd.isna(r["away_odds"])
-                    else float(r["away_odds"]),
-                    source,
-                    utc_now(),
-                ),
-            )
-
-            changed = conn.execute(
-                "SELECT changes()"
-            ).fetchone()[0]
-
-            if changed:
-                inserted += 1
-            else:
-                skipped += 1
-
-        except Exception:
-            skipped += 1
-
-    conn.commit()
-
-    return inserted, skipped
-
-
-# ============================================================
-# HISTORICAL TEAM DATA
-# ============================================================
-
-def get_team_matches(
-    conn,
-    team,
-    before_date=None,
-    limit=20,
-):
-
-    if before_date:
-
-        return qdf(
-            conn,
-            """
-            SELECT *
-            FROM historical_matches
-
-            WHERE
-                (
-                    home_team = ?
-                    OR away_team = ?
-                )
-                AND match_date < ?
-
-            ORDER BY match_date DESC
-
-            LIMIT ?
-            """,
-            (
-                team,
-                team,
-                before_date,
-                limit,
-            ),
-        )
-
-    return qdf(
-        conn,
-        """
-        SELECT *
-        FROM historical_matches
-
-        WHERE
-            home_team = ?
-            OR away_team = ?
-
-        ORDER BY match_date DESC
-
-        LIMIT ?
-        """,
-        (
-            team,
-            team,
-            limit,
-        ),
-    )
-
-
-def result_for_team(
-    row,
-    team,
-):
-
-    hg = int(row.home_goals)
-    ag = int(row.away_goals)
-
-    if row.home_team == team:
-
-        gf = hg
-        ga = ag
-
-    else:
-
-        gf = ag
-        ga = hg
-
-    if gf > ga:
-        points = 3
-
-    elif gf == ga:
-        points = 1
-
-    else:
-        points = 0
-
-    return gf, ga, points
-
-
-def form_score(
-    conn,
-    team,
-    before_date=None,
-    n=10,
-):
-
-    matches = get_team_matches(
-        conn,
-        team,
-        before_date,
-        n,
-    )
-
-    if matches.empty:
-
-        return (
-            0.50,
-            0.0,
-            0.0,
-            0,
-        )
-
-    points = 0
-    gf = 0
-    ga = 0
-
-    for _, row in matches.iterrows():
-
-        x, y, p = result_for_team(
-            row,
-            team,
-        )
-
-        gf += x
-        ga += y
-        points += p
-
-    return (
-        points / (3 * len(matches)),
-        gf / len(matches),
-        ga / len(matches),
-        len(matches),
-    )
-
-
-# ============================================================
-# ELO
-# ============================================================
-
-def get_elo(
-    conn,
-    team,
-):
-
-    row = conn.execute(
-        """
-        SELECT elo
-        FROM team_ratings
-        WHERE team = ?
-        """,
-        (team,),
-    ).fetchone()
-
-    if row:
-        return float(row[0])
-
-    return 1500.0
-
-
-def rebuild_elo(
-    conn,
-    k_factor=20,
-    home_advantage=55,
-):
-
-    matches = qdf(
-        conn,
-        """
-        SELECT *
-        FROM historical_matches
-
-        ORDER BY
-            match_date ASC,
-            id ASC
-        """,
-    )
-
-    ratings = {}
-    counts = {}
-
-    for _, r in matches.iterrows():
-
-        home = normalize_team(
-            r.home_team
-        )
-
-        away = normalize_team(
-            r.away_team
-        )
-
-        ratings.setdefault(
-            home,
-            1500.0,
-        )
-
-        ratings.setdefault(
-            away,
-            1500.0,
-        )
-
-        counts.setdefault(
-            home,
-            0,
-        )
-
-        counts.setdefault(
-            away,
-            0,
-        )
-
-        rh = (
-            ratings[home]
-            + home_advantage
-        )
-
-        ra = ratings[away]
-
-        expected_home = (
-            1
-            /
-            (
-                1
-                +
-                10
-                **
-                (
-                    (ra - rh)
-                    /
-                    400
-                )
-            )
-        )
-
-        if r.home_goals > r.away_goals:
-
-            actual_home = 1.0
-
-        elif r.home_goals == r.away_goals:
-
-            actual_home = 0.5
-
-        else:
-
-            actual_home = 0.0
-
-        margin = abs(
-            int(r.home_goals)
-            -
-            int(r.away_goals)
-        )
-
-        multiplier = (
-            math.log(margin + 1) + 1
-            if margin
-            else 1
-        )
-
-        delta = (
-            k_factor
-            * multiplier
-            * (
-                actual_home
-                -
-                expected_home
-            )
-        )
-
-        ratings[home] += delta
-        ratings[away] -= delta
-
-        counts[home] += 1
-        counts[away] += 1
-
-    conn.execute(
-        "DELETE FROM team_ratings"
-    )
-
-    now = utc_now()
-
-    for team, elo in ratings.items():
-
-        conn.execute(
-            """
-
-            INSERT INTO team_ratings
-
-            (
-                team,
-                elo,
-                attack,
-                defence,
-                matches,
-                updated_at
-            )
-
-            VALUES (?, ?, ?, ?, ?, ?)
-
-            """,
-            (
-                team,
-                elo,
-                1.35,
-                1.35,
-                counts.get(team, 0),
-                now,
-            ),
-        )
-
-    conn.commit()
-
-    return (
-        len(ratings),
-        len(matches),
-    )
-
-
-# ============================================================
-# ATTACK / DEFENCE
-# ============================================================
-
-def attack_defence(
-    conn,
-    team,
-    before_date=None,
-    n=20,
-):
-
-    matches = get_team_matches(
-        conn,
-        team,
-        before_date,
-        n,
-    )
-
-    if matches.empty:
-
-        return (
-            1.35,
-            1.35,
-            0,
-        )
-
-    gf = 0
-    ga = 0
-    games = 0
-
-    for _, row in matches.iterrows():
-
-        x, y, _ = result_for_team(
-            row,
-            team,
-        )
-
-        gf += x
-        ga += y
-        games += 1
-
-    league_average = scalar(
-        conn,
-        """
-        SELECT
-            AVG(home_goals + away_goals)
-            / 2.0
-
-        FROM historical_matches
-        """,
-        default=1.35,
-    )
-
-    league_average = max(
-        float(
-            league_average
-            or 1.35
-        ),
-        0.60,
-    )
-
-    attack = max(
-        0.25,
-        min(
-            3.50,
-            (
-                gf / games
-            )
-            /
-            league_average,
-        ),
-    )
-
-    defence = max(
-        0.25,
-        min(
-            3.50,
-            (
-                ga / games
-            )
-            /
-            league_average,
-        ),
-    )
-
-    return (
-        attack,
-        defence,
-        games,
-    )
-
-
-# ============================================================
-# MODEL INPUTS
-# ============================================================
-
-def model_inputs(
-    conn,
-    home,
-    away,
-    match_date=None,
-):
-
-    home_form, home_gf, home_ga, home_n = form_score(
-        conn,
-        home,
-        match_date,
-        10,
-    )
-
-    away_form, away_gf, away_ga, away_n = form_score(
-        conn,
-        away,
-        match_date,
-        10,
-    )
-
-    home_attack, home_defence, home_games = attack_defence(
-        conn,
-        home,
-        match_date,
-        20,
-    )
-
-    away_attack, away_defence, away_games = attack_defence(
-        conn,
-        away,
-        match_date,
-        20,
-    )
-
-    home_elo = get_elo(
-        conn,
-        home,
-    )
-
-    away_elo = get_elo(
-        conn,
-        away,
-    )
-
-    home_form_factor = (
-        0.85
-        +
-        0.30 * home_form
-    )
-
-    away_form_factor = (
-        0.85
-        +
-        0.30 * away_form
-    )
-
-    elo_diff = (
-        home_elo
-        +
-        55
-        -
-        away_elo
-    )
-
-    elo_factor = (
-        10
-        **
-        (
-            elo_diff
-            /
-            400
-        )
-    )
-
-    league_average = scalar(
-        conn,
-        """
-        SELECT
-            AVG(home_goals + away_goals)
-            / 2.0
-
-        FROM historical_matches
-        """,
-        default=1.35,
-    )
-
-    league_average = max(
-        float(
-            league_average
-            or 1.35
-        ),
-        0.80,
-    )
-
-    home_sample = min(
-        1.0,
-        home_n / 10,
-    )
-
-    away_sample = min(
-        1.0,
-        away_n / 10,
-    )
-
-    home_xg = (
-        league_average
-        *
-        math.sqrt(
-            max(
-                home_attack,
-                0.25,
-            )
-            *
-            max(
-                1 / away_defence,
-                0.25,
-            )
-        )
-    )
-
-    away_xg = (
-        league_average
-        *
-        math.sqrt(
-            max(
-                away_attack,
-                0.25,
-            )
-            *
-            max(
-                1 / home_defence,
-                0.25,
-            )
-        )
-    )
-
-    home_xg *= home_form_factor
-    away_xg *= away_form_factor
-
-    elo_adjust = max(
-        0.80,
-        min(
-            1.25,
-            math.sqrt(
-                elo_factor
-            ),
-        ),
-    )
-
-    home_xg *= elo_adjust
-    away_xg /= elo_adjust
-
-    neutral = league_average
-
-    home_xg = (
-        home_sample
-        * home_xg
-        +
-        (
-            1
-            -
-            home_sample
-        )
-        * neutral
-        * 1.05
-    )
-
-    away_xg = (
-        away_sample
-        * away_xg
-        +
-        (
-            1
-            -
-            away_sample
-        )
-        * neutral
-        * 0.95
-    )
-
-    return {
-
-        "home_xg": max(
-            0.10,
-            min(
-                5.00,
-                home_xg,
-            ),
-        ),
-
-        "away_xg": max(
-            0.10,
-            min(
-                5.00,
-                away_xg,
-            ),
-        ),
-
-        "home_elo": home_elo,
-        "away_elo": away_elo,
-
-        "form_home": home_form,
-        "form_away": away_form,
-
-        "home_games": home_n,
-        "away_games": away_n,
-    }
-
-
-# ============================================================
-# POISSON ENGINE
-# ============================================================
-
-def poisson_1x2(
-    home_xg,
-    away_xg,
-    max_goals=8,
-):
-
-    home_probs = [
-        poisson.pmf(
-            i,
-            home_xg,
-        )
-        for i in range(
-            max_goals + 1
-        )
-    ]
-
-    away_probs = [
-        poisson.pmf(
-            i,
-            away_xg,
-        )
-        for i in range(
-            max_goals + 1
-        )
-    ]
-
-    home_win = 0.0
-    draw = 0.0
-    away_win = 0.0
-
-    for h, hp in enumerate(
-        home_probs
-    ):
-
-        for a, ap in enumerate(
-            away_probs
-        ):
-
-            probability = (
-                hp * ap
-            )
-
-            if h > a:
-
-                home_win += probability
-
-            elif h == a:
-
-                draw += probability
-
-            else:
-
-                away_win += probability
-
-    total = (
-        home_win
-        +
-        draw
-        +
-        away_win
-    )
-
-    return (
-        home_win / total,
-        draw / total,
-        away_win / total,
-    )
-
-
-# ============================================================
-# MARKET MATH
-# ============================================================
-
-def implied_probability(
-    odds,
-):
-
-    if (
-        odds is None
-        or not np.isfinite(odds)
-        or odds <= 1.0
-    ):
-
-        return None
-
-    return 1.0 / float(odds)
-
-
-def confidence_score(
-    probabilities,
-    history_games,
-    edge,
-):
-
-    top = max(
-        probabilities
-    )
-
-    second = sorted(
-        probabilities,
-        reverse=True,
-    )[1]
-
-    separation = max(
-        0.0,
-        top - second,
-    )
-
-    history_factor = min(
-        1.0,
-        history_games / 20,
-    )
-
-    edge_factor = max(
-        0.0,
-        min(
-            1.0,
-            (
-                edge + 0.05
-            )
-            /
-            0.20,
-        ),
-    )
-
-    raw = (
-        55
-        +
-        35 * top
-        +
-        18 * separation
-        +
-        8 * history_factor
-        +
-        5 * edge_factor
-    )
-
-    return int(
-        max(
-            0,
-            min(
-                99,
-                round(raw),
-            ),
-        )
-    )
-
-
-def verdict(
-    confidence,
-    edge,
-):
-
-    if edge is None:
-
-        return "⚪ INFORMATIONAL"
-
-    if (
-        edge >= 0.08
-        and confidence >= 85
-    ):
-
-        return "🔥 ELITE APPROVED"
-
-    if (
-        edge >= 0.04
-        and confidence >= 75
-    ):
-
-        return "✅ APPROVED"
-
-    if (
-        edge >= 0.01
-        and confidence >= 65
-    ):
-
-        return "⚠ WATCHLIST"
-
-    return "❌ NO BET"
-
-
-# ============================================================
-# MATCH ANALYSIS
-# ============================================================
-
-def analyze_match(
-    conn,
-    event,
-    league_name,
-):
-
-    home = normalize_team(
-        event["home_team"]
-    )
-
-    away = normalize_team(
-        event["away_team"]
-    )
-
-    inputs = model_inputs(
-        conn,
-        home,
-        away,
-    )
-
-    ph, pd, pa = poisson_1x2(
-        inputs["home_xg"],
-        inputs["away_xg"],
-    )
-
-    probabilities = {
-
-        "Home Win": ph,
-
-        "Draw": pd,
-
-        "Away Win": pa,
-    }
-
-    prediction = max(
-        probabilities,
-        key=probabilities.get,
-    )
-
-    model_probability = (
-        probabilities[prediction]
-    )
-
-    odds = {
-
-        "Home Win": None,
-
-        "Draw": None,
-
-        "Away Win": None,
-    }
-
-    # Use the first bookmaker that supplies
-    # a complete 1X2 market.
-    for bookmaker in event.get(
-        "bookmakers",
-        [],
-    ):
-
-        market = next(
-            (
-                m
-                for m in bookmaker.get(
-                    "markets",
-                    [],
-                )
-                if m.get("key")
-                == "h2h"
-            ),
-            None,
-        )
-
-        if not market:
-            continue
-
-        temporary = {
-            "Home Win": None,
-            "Draw": None,
-            "Away Win": None,
-        }
-
-        for outcome in market.get(
-            "outcomes",
-            [],
-        ):
-
-            name = outcome.get(
-                "name"
-            )
-
-            price = outcome.get(
-                "price"
-            )
-
-            if name == home:
-
-                temporary[
-                    "Home Win"
-                ] = price
-
-            elif name == away:
-
-                temporary[
-                    "Away Win"
-                ] = price
-
-            elif name == "Draw":
-
-                temporary[
-                    "Draw"
-                ] = price
-
-        if all(
-            value is not None
-            for value in temporary.values()
-        ):
-
-            odds = temporary
-            break
-
-    selected_odds = odds[
-        prediction
-    ]
-
-    implied = implied_probability(
-        selected_odds
-    )
-
-    edge = (
-        None
-        if implied is None
-        else
-        model_probability
-        -
-        implied
-    )
-
-    expected_value = (
-        None
-        if selected_odds is None
-        else
-        (
-            model_probability
-            *
-            selected_odds
-        )
-        -
-        1.0
-    )
-
-    confidence = confidence_score(
-        list(
-            probabilities.values()
-        ),
-        inputs["home_games"]
-        +
-        inputs["away_games"],
-        0
-        if edge is None
-        else edge,
-    )
-
-    return {
-
-        "event_id":
-            event.get("id"),
-
-        "commence_time":
-            event.get("commence_time"),
-
-        "league":
-            league_name,
-
-        "home_team":
-            home,
-
-        "away_team":
-            away,
-
-        "prediction":
-            prediction,
-
-        "confidence":
-            confidence,
-
-        "verdict":
-            verdict(
-                confidence,
-                edge,
-            ),
-
-        "home_probability":
-            ph,
-
-        "draw_probability":
-            pd,
-
-        "away_probability":
-            pa,
-
-        "model_probability":
-            model_probability,
-
-        "implied_probability":
-            implied,
-
-        "edge":
-            edge,
-
-        "odds":
-            selected_odds,
-
-        "expected_value":
-            expected_value,
-
-        **inputs,
-    }
-
-
-# ============================================================
-# ODDS API
-# ============================================================
-
-def fetch_odds(
-    api_key,
-    sport_key,
-):
-
-    url = (
-        f"{ODDS_BASE}"
-        f"/sports/"
-        f"{sport_key}"
-        f"/odds/"
-    )
-
-    params = {
-
-        "apiKey":
-            api_key,
-
-        "regions":
-            "uk,eu",
-
-        "markets":
-            "h2h",
-
-        "oddsFormat":
-            "decimal",
-    }
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=20,
-    )
-
-    if response.status_code != 200:
-
-        raise RuntimeError(
-            f"Odds API error "
-            f"{response.status_code}: "
-            f"{response.text[:500]}"
-        )
-
-    return (
-        response.json(),
-        response.headers,
-    )
-
-
-def fetch_scores(
-    api_key,
-    sport_key,
-    days_from=3,
-):
-
-    url = (
-        f"{ODDS_BASE}"
-        f"/sports/"
-        f"{sport_key}"
-        f"/scores/"
-    )
-
-    params = {
-
-        "apiKey":
-            api_key,
-
-        "daysFrom":
-            days_from,
-    }
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=20,
-    )
-
-    if response.status_code != 200:
-
-        raise RuntimeError(
-            f"Scores API error "
-            f"{response.status_code}: "
-            f"{response.text[:500]}"
-        )
-
-    return response.json()
-
-
-# ============================================================
-# PREDICTION ARCHIVE
-# ============================================================
-
-def save_prediction(
-    conn,
-    analysis,
-):
-
-    conn.execute(
-        """
-
-        INSERT INTO predictions
-
-        (
-            event_id,
-            created_at,
-            commence_time,
-            league,
-            home_team,
-            away_team,
-            prediction,
-            market,
-            confidence,
-            verdict,
-            model_probability,
-            implied_probability,
-            edge,
-            odds,
-            expected_value,
-            home_xg,
-            away_xg,
-            home_elo,
-            away_elo,
-            form_home,
-            form_away
-        )
-
-        VALUES
-        (
-            ?, ?, ?, ?, ?, ?, ?, '1X2',
-            ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?
-        )
-
-        """,
-        (
-            analysis["event_id"],
-            utc_now(),
-            analysis["commence_time"],
-            analysis["league"],
-            analysis["home_team"],
-            analysis["away_team"],
-            analysis["prediction"],
-            analysis["confidence"],
-            analysis["verdict"],
-            analysis["model_probability"],
-            analysis["implied_probability"],
-            analysis["edge"],
-            analysis["odds"],
-            analysis["expected_value"],
-            analysis["home_xg"],
-            analysis["away_xg"],
-            analysis["home_elo"],
-            analysis["away_elo"],
-            analysis["form_home"],
-            analysis["form_away"],
-        ),
-    )
-
-
-# ============================================================
-# RESULT SETTLEMENT
-# ============================================================
-
-def settle_predictions(
-    conn,
-    scores,
-):
-
-    updated = 0
-
-    for event in scores:
-
-        if not event.get(
-            "completed"
-        ):
-
-            continue
-
-        scores_list = (
-            event.get("scores")
-            or []
-        )
-
-        home_goals = None
-        away_goals = None
-
-        for score in scores_list:
-
-            if (
-                score.get("name")
-                ==
-                event.get(
-                    "home_team"
-                )
-            ):
-
-                home_goals = score.get(
-                    "score"
-                )
-
-            elif (
-                score.get("name")
-                ==
-                event.get(
-                    "away_team"
-                )
-            ):
-
-                away_goals = score.get(
-                    "score"
-                )
-
-        if (
-            home_goals is None
-            or
-            away_goals is None
-        ):
-
-            continue
-
-        home_goals = int(
-            home_goals
-        )
-
-        away_goals = int(
-            away_goals
-        )
-
-        if home_goals > away_goals:
-
-            actual = "Home Win"
-
-        elif home_goals == away_goals:
-
-            actual = "Draw"
-
-        else:
-
-            actual = "Away Win"
-
-        rows = conn.execute(
-            """
-
-            SELECT
-                id,
-                prediction,
-                odds
-
-            FROM predictions
-
-            WHERE
-                event_id = ?
-                AND status = 'PENDING'
-
-            """,
-            (
-                event.get("id"),
-            ),
-        ).fetchall()
-
-        for (
-            prediction_id,
-            prediction,
-            odds,
-        ) in rows:
-
-            if (
-                prediction
-                ==
-                actual
-                and
-                odds
-                and
-                odds > 1
-            ):
-
-                profit_loss = (
-                    float(odds)
-                    -
-                    1.0
-                )
-
-            else:
-
-                profit_loss = -1.0
-
-            conn.execute(
-                """
-
-                UPDATE predictions
-
-                SET
-                    status = 'SETTLED',
-                    actual_result = ?,
-                    home_goals = ?,
-                    away_goals = ?,
-                    profit_loss = ?
-
-                WHERE id = ?
-
-                """,
-                (
-                    actual,
-                    home_goals,
-                    away_goals,
-                    profit_loss,
-                    prediction_id,
-                ),
-            )
-
-            updated += 1
-
-    conn.commit()
-
-    return updated
-
-
-# ============================================================
-# PERFORMANCE
-# ============================================================
-
-def prediction_metrics(
-    conn,
-):
-
-    df = qdf(
-        conn,
-        """
-
-        SELECT *
-
-        FROM predictions
-
-        WHERE
-            status = 'SETTLED'
-
-        ORDER BY
-            created_at DESC
-
-        """,
-    )
-
-    if df.empty:
-
-        return (
-            {
-                "count": 0,
-                "wins": 0,
-                "accuracy": 0,
-                "roi": 0,
-                "profit": 0,
-                "avg_confidence": 0,
-            },
-            df,
-        )
-
-    wins = int(
-        (
-            df["prediction"]
-            ==
-            df["actual_result"]
-        ).sum()
-    )
-
-    profit = float(
-        df["profit_loss"].sum()
-    )
-
-    count = len(df)
-
-    return (
-        {
-            "count":
-                count,
-
-            "wins":
-                wins,
-
-            "accuracy":
-                wins / count,
-
-            "roi":
-                profit / count,
-
-            "profit":
-                profit,
-
-            "avg_confidence":
-                float(
-                    df[
-                        "confidence"
-                    ].mean()
-                ),
-        },
-        df,
-    )
-
-
-# ============================================================
-# APPLICATION
-# ============================================================
-
-st.title(
-    "⚽ Football Intelligence Platform v5.0"
-)
-
-st.caption(
-    "Historical Data • Form • Elo • Poisson • "
-    "Market Value • Prediction Archive • "
-    "Result Settlement • Calibration"
-)
-
-conn = get_connection()
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
+            r=requests.get(f"{OF_RAW}/{p}",timeout=25)
+            if r.status_code!=200: continue
+            data=r.json()
+            competition=data.get("name") or Path(p).stem
+            season=season_from_path(p)
+            batch=[parse_match(m,competition,season,p) for m in data.get("matches",[])]
+            batch=[x for x in batch if x]
+            if batch:
+                c.executemany("""INSERT OR IGNORE INTO historical_matches
+                (source,source_key,match_date,competition,season,home_team,away_team,
+                 home_goals,away_goals,round_name,imported_at)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?)""",batch)
+                rows+=len(batch); files+=1
+        except Exception as e: errors.append(f"{p}: {e}")
+    c.commit(); c.close()
+    return files,rows,errors
+
+def history():
+    c=conn()
+    d=pd.read_sql_query("SELECT * FROM historical_matches ORDER BY match_date,id",c)
+    c.close()
+    if not d.empty: d["match_date"]=pd.to_datetime(d["match_date"],utc=True,errors="coerce")
+    return d.dropna(subset=["match_date"]) if not d.empty else d
+
+# ---------- leakage-safe model ----------
+def state(h,before=None,competition=None):
+    x=h.copy()
+    if competition and competition!="ALL": x=x[x.competition==competition]
+    if before is not None: x=x[x.match_date<before]
+    elo={}; st={}
+    for r in x.sort_values(["match_date","id"]).itertuples():
+        ht,at=team_key(r.home_team),team_key(r.away_team)
+        eh,ea=elo.get(ht,1500.),elo.get(at,1500.)
+        exp=1/(1+10**((ea+35-eh)/400))
+        actual=1 if r.home_goals>r.away_goals else .5 if r.home_goals==r.away_goals else 0
+        k=28 if st.get(ht,{}).get("n",0)+st.get(at,{}).get("n",0)<20 else 20
+        d=k*(actual-exp); elo[ht]=eh+d; elo[at]=ea-d
+        for t,gf,ga,side in [(ht,r.home_goals,r.away_goals,"home"),(at,r.away_goals,r.home_goals,"away")]:
+            q=st.setdefault(t,{"n":0,"gf":0,"ga":0,"hg":0,"ha":0,"hn":0,"ag":0,"aa":0,"an":0,"recent":[]})
+            q["n"]+=1;q["gf"]+=gf;q["ga"]+=ga;q["recent"]=(q["recent"]+[(gf,ga)])[-8:]
+            if side=="home": q["hg"]+=gf;q["ha"]+=ga;q["hn"]+=1
+            else: q["ag"]+=gf;q["aa"]+=ga;q["an"]+=1
+    return elo,st,x
+
+def model(h,home,away,competition=None,before=None):
+    elo,st,x=state(h,before,competition)
+    hk,ak=team_key(home),team_key(away)
+    eh,ea=elo.get(hk,1500),elo.get(ak,1500)
+    sh,sa=st.get(hk,{}),st.get(ak,{})
+    bh=max(.65,float(x.home_goals.mean())) if len(x) else 1.35
+    ba=max(.55,float(x.away_goals.mean())) if len(x) else 1.05
+    def attack(q,side,base):
+        n=q.get(side[0]+"n",0)
+        gf=q.get(side[0]+"g",0)/n if n else q.get("gf",0)/max(1,q.get("n",0))
+        return float(np.clip(gf/max(.4,base),.55,1.7)) if q else 1.
+    def defence(q,side,base):
+        n=q.get(side[0]+"n",0)
+        ga=q.get(side[0]+"a",0)/n if n else q.get("ga",0)/max(1,q.get("n",0))
+        return float(np.clip(base/max(.4,ga),.55,1.7)) if q else 1.
+    ah=attack(sh,"home",bh); aa=attack(sa,"away",ba)
+    dh=defence(sh,"home",ba); da=defence(sa,"away",bh)
+    def form(q):
+        z=q.get("recent",[])[-5:]
+        return np.mean([3 if g>a else 1 if g==a else 0 for g,a in z])/3 if z else .5
+    fh,fa=form(sh),form(sa)
+    ed=(eh-ea)/400
+    lh=np.clip(bh*ah*da*np.exp(np.clip(.28*ed+.08*(fh-fa),-.45,.45)),.2,3.8)
+    la=np.clip(ba*aa*dh*np.exp(np.clip(-.20*ed+.06*(fa-fh),-.35,.35)),.15,3.4)
+    return probs(lh,la),float(lh),float(la)
+
+def confidence(p):
+    ent=-sum(float(x)*math.log(max(float(x),1e-12),3) for x in p)
+    return round(float(np.clip((1-ent)*100,0,100)),1)
+
+def decision(p,odds,min_edge=.035,min_ev=.04):
+    k=pick(p); i={"HOME":0,"DRAW":1,"AWAY":2}[k]
+    e=v=np.nan
+    if k in odds:
+        e=float(p[i]-1/odds[k]); v=float(ev(p[i],odds[k]))
+    verdict="VALUE CANDIDATE" if np.isfinite(e) and np.isfinite(v) and e>=min_edge and v>=min_ev else "MODEL LEAN" if confidence(p)>=55 else "NO BET"
+    return k,e,v,verdict
+
+# ---------- chronological backtest ----------
+def backtest(h,competition="ALL",n_test=400,min_train=80):
+    x=h if competition=="ALL" else h[h.competition==competition]
+    x=x.sort_values(["match_date","id"]).reset_index(drop=True)
+    if len(x)<=min_train: return pd.DataFrame(),{"error":f"Need >{min_train} matches; found {len(x)}."}
+    start=max(min_train,len(x)-n_test); rows=[]
+    for i in range(start,len(x)):
+        r=x.iloc[i]
+        p,xh,xa=model(x,r.home_team,r.away_team,competition,r.match_date)
+        y=result(int(r.home_goals),int(r.away_goals))
+        one=np.array([y=="H",y=="D",y=="A"],dtype=float)
+        rows.append({"date":r.match_date.date().isoformat(),"competition":r.competition,
+                     "home":r.home_team,"away":r.away_team,"p_home":p[0],"p_draw":p[1],"p_away":p[2],
+                     "pick":pick(p),"actual":y,"correct":int(pick(p)==y),
+                     "brier":float(np.sum((p-one)**2)),"log_loss":float(-math.log(max(p[["H","D","A"].index(y)],1e-12))),
+                     "xg_home":xh,"xg_away":xa})
+    d=pd.DataFrame(rows)
+    return d,{"matches":len(d),"accuracy":d.correct.mean(),"brier":d.brier.mean(),"log_loss":d.log_loss.mean()}
+
+# ---------- settlement ----------
+def settle(api_key,sport):
+    r=requests.get(f"{ODDS}/sports/{sport}/scores",params={"apiKey":api_key,"daysFrom":3},timeout=25)
+    if r.status_code!=200: raise RuntimeError(f"Scores API {r.status_code}: {r.text[:500]}")
+    events=r.json(); c=conn()
+    p=pd.read_sql_query("SELECT * FROM predictions WHERE status='OPEN'",c)
+    done=0
+    for e in events:
+        if not e.get("completed"): continue
+        vals={z.get("name"):int(z.get("score")) for z in e.get("scores",[]) if str(z.get("score","")).isdigit()}
+        if e.get("home_team") not in vals or e.get("away_team") not in vals: continue
+        actual=result(vals[e["home_team"]],vals[e["away_team"]])
+        for r in p[p.event_id==e.get("id")].itertuples():
+            won=(r.pick=="HOME" and actual=="H") or (r.pick=="DRAW" and actual=="D") or (r.pick=="AWAY" and actual=="A")
+            profit=(r.market_odds-1) if won and r.market_odds and r.market_odds>1 else -1 if r.market_odds else None
+            c.execute("UPDATE predictions SET status='SETTLED',actual_result=?,profit_units=? WHERE id=?",(actual,profit,r.id)); done+=1
+    c.commit();c.close();return done
+
+# ---------- UI ----------
+st.title(f"âš½ Football Intelligence Platform v{APP_VERSION}")
+st.caption("Automated public-domain results â€¢ dynamically discovered live odds â€¢ leakage-safe modelling â€¢ backtesting â€¢ EV â€¢ paper ROI")
 
 with st.sidebar:
+    key=st.text_input("The Odds API key",value=st.secrets.get("ODDS_API_KEY","") if hasattr(st,"secrets") else "",type="password")
+    seasons=st.slider("Historical seasons",2,12,6)
+    min_edge=st.slider("Minimum edge",0.00,0.20,0.035,0.005)
+    min_ev=.04
+    st.caption("Historical odds are deliberately NOT required: The Odds API historical odds are a paid feature. The platform builds its own live odds history from deployment onward.")
 
-    st.header(
-        "Platform Settings"
-    )
+h=history()
+a,b,c,d=st.columns(4)
+a.metric("Historical matches",f"{len(h):,}")
+b.metric("Teams",f"{len(set(h.home_team)|set(h.away_team)):,}" if len(h) else "0")
+cc=conn()
+pred_count=cc.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+open_count=cc.execute("SELECT COUNT(*) FROM predictions WHERE status='OPEN'").fetchone()[0]
+cc.close()
+c.metric("Archived predictions",f"{pred_count:,}")
+d.metric("Open predictions",f"{open_count:,}")
 
-    api_key = st.text_input(
-        "Odds API Key",
-        value=get_api_key(),
-        type="password",
-        help=(
-            "Prefer Streamlit Secrets or "
-            "the ODDS_API_KEY environment variable."
-        ),
-    )
+live, hist, bt, perf, dbtab=st.tabs(["Live Intelligence","Historical Data","Backtest","Performance","Database"])
 
-    league_name = st.selectbox(
-        "Competition",
-        list(LEAGUES.keys()),
-    )
-
-    sport_key = LEAGUES[
-        league_name
-    ]
-
-    st.divider()
-
-    st.subheader(
-        "Historical Data"
-    )
-
-    uploaded = st.file_uploader(
-        "Upload historical CSV",
-        type=["csv"],
-        help=(
-            "Football-Data style files "
-            "such as Date, HomeTeam, AwayTeam, "
-            "FTHG and FTAG are supported."
-        ),
-    )
-
-    if uploaded is not None:
-
-        if st.button(
-            "Import Historical CSV",
-            use_container_width=True,
-        ):
-
-            try:
-
-                history = prepare_history_csv(
-                    uploaded,
-                    league_name,
-                )
-
-                inserted, skipped = import_history(
-                    conn,
-                    history,
-                    source=uploaded.name,
-                )
-
-                teams, games = rebuild_elo(
-                    conn
-                )
-
-                st.success(
-                    f"Imported {inserted} matches; "
-                    f"skipped {skipped}. "
-                    f"Elo rebuilt for {teams} "
-                    f"teams across {games} matches."
-                )
-
-            except Exception as e:
-
-                st.error(
-                    str(e)
-                )
-
-    if st.button(
-        "Rebuild Elo Ratings",
-        use_container_width=True,
-    ):
-
-        teams, games = rebuild_elo(
-            conn
-        )
-
-        st.success(
-            f"Elo rebuilt: "
-            f"{teams} teams / "
-            f"{games} matches."
-        )
-
-    st.divider()
-
-    st.subheader(
-        "Data Controls"
-    )
-
-    history_count = int(
-        scalar(
-            conn,
-            """
-            SELECT COUNT(*)
-            FROM historical_matches
-            """,
-        )
-    )
-
-    prediction_count = int(
-        scalar(
-            conn,
-            """
-            SELECT COUNT(*)
-            FROM predictions
-            """,
-        )
-    )
-
-    team_count = int(
-        scalar(
-            conn,
-            """
-            SELECT COUNT(*)
-            FROM team_ratings
-            """,
-        )
-    )
-
-    st.metric(
-        "Historical Matches",
-        f"{history_count:,}",
-    )
-
-    st.metric(
-        "Predictions Archived",
-        f"{prediction_count:,}",
-    )
-
-    st.metric(
-        "Teams Rated",
-        f"{team_count:,}",
-    )
-
-    if st.button(
-        "Refresh App",
-        use_container_width=True,
-    ):
-
-        st.rerun()
-
-
-# ============================================================
-# TABS
-# ============================================================
-
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    [
-        "🔎 Live Intelligence",
-        "📚 Historical Data",
-        "🧠 Ratings",
-        "📈 Performance",
-        "⚙️ Database",
-    ]
-)
-
-
-# ============================================================
-# LIVE INTELLIGENCE
-# ============================================================
-
-with tab1:
-
-    if not api_key:
-
-        st.info(
-            "Enter your Odds API key in the sidebar, "
-            "or configure ODDS_API_KEY in Streamlit Secrets."
-        )
-
+with live:
+    if not key:
+        st.info("Enter the API key. The app will discover valid soccer sport keys automatically, so invalid hard-coded keys cannot cause the old UNKNOWN_SPORT problem.")
     else:
-
-        col1, col2 = st.columns(
-            [1, 1]
-        )
-
-        with col1:
-
-            load_live = st.button(
-                "Load Upcoming Matches",
-                type="primary",
-            )
-
-        with col2:
-
-            settle = st.button(
-                "Settle Archived Predictions"
-            )
-
-        if settle:
-
-            try:
-
-                scores = fetch_scores(
-                    api_key,
-                    sport_key,
-                    days_from=3,
-                )
-
-                count = settle_predictions(
-                    conn,
-                    scores,
-                )
-
-                st.success(
-                    f"Settled {count} "
-                    f"prediction(s)."
-                )
-
-            except Exception as e:
-
-                st.error(
-                    str(e)
-                )
-
-        if load_live:
-
-            try:
-
-                with st.spinner(
-                    "Loading fixtures and bookmaker odds..."
-                ):
-
-                    events, headers = fetch_odds(
-                        api_key,
-                        sport_key,
-                    )
-
-                remaining = headers.get(
-                    "x-requests-remaining"
-                )
-
-                if remaining:
-
-                    st.caption(
-                        "Odds API requests remaining: "
-                        + str(remaining)
-                    )
-
-                analyses = []
-
-                for event in events:
-
-                    try:
-
-                        analyses.append(
-                            analyze_match(
-                                conn,
-                                event,
-                                league_name,
-                            )
-                        )
-
-                    except Exception as e:
-
-                        st.warning(
-                            f"Could not analyse "
-                            f"{event.get('home_team')} "
-                            f"vs "
-                            f"{event.get('away_team')}: "
-                            f"{e}"
-                        )
-
-                if not analyses:
-
-                    st.warning(
-                        "No analysable matches returned."
-                    )
-
-                else:
-
-                    df = pd.DataFrame(
-                        analyses
-                    )
-
-                    df["Edge %"] = (
-                        df["edge"]
-                        .fillna(0)
-                        * 100
-                    )
-
-                    df["Model %"] = (
-                        df[
-                            "model_probability"
-                        ]
-                        * 100
-                    )
-
-                    df["Odds"] = df[
-                        "odds"
-                    ]
-
-                    df["xG"] = (
-                        df[
-                            "home_xg"
-                        ].round(2).astype(str)
-                        +
-                        " - "
-                        +
-                        df[
-                            "away_xg"
-                        ].round(2).astype(str)
-                    )
-
-                    display = df[
-                        [
-                            "home_team",
-                            "away_team",
-                            "prediction",
-                            "Model %",
-                            "Edge %",
-                            "Odds",
-                            "confidence",
-                            "verdict",
-                            "xG",
-                        ]
-                    ].copy()
-
-                    display.columns = [
-                        "Home",
-                        "Away",
-                        "Prediction",
-                        "Model Probability %",
-                        "Edge %",
-                        "Odds",
-                        "Confidence",
-                        "Verdict",
-                        "xG",
-                    ]
-
-                    display = display.sort_values(
-                        [
-                            "Confidence",
-                            "Edge %",
-                        ],
-                        ascending=False,
-                    )
-
-                    st.subheader(
-                        "Ranked Opportunities"
-                    )
-
-                    st.dataframe(
-                        display.style.format(
-                            {
-                                "Model Probability %":
-                                    "{:.1f}",
-
-                                "Edge %":
-                                    "{:.1f}",
-
-                                "Odds":
-                                    "{:.2f}",
-
-                                "Confidence":
-                                    "{:.0f}",
-                            }
-                        ),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                    selected_index = st.selectbox(
-                        "Detailed Match Analysis",
-                        range(len(df)),
-                        format_func=lambda i:
-                            (
-                                f"{df.iloc[i]['home_team']} "
-                                f"vs "
-                                f"{df.iloc[i]['away_team']} "
-                                f"— "
-                                f"{df.iloc[i]['prediction']}"
-                            ),
-                    )
-
-                    analysis = df.iloc[
-                        selected_index
-                    ].to_dict()
-
-                    c1, c2, c3, c4 = st.columns(
-                        4
-                    )
-
-                    c1.metric(
-                        "Prediction",
-                        analysis[
-                            "prediction"
-                        ],
-                    )
-
-                    c2.metric(
-                        "Confidence",
-                        f"{analysis['confidence']}/99",
-                    )
-
-                    c3.metric(
-                        "Model Probability",
-                        (
-                            f"{analysis['model_probability'] * 100:.1f}%"
-                        ),
-                    )
-
-                    c4.metric(
-                        "Edge",
-                        (
-                            "N/A"
-                            if pd.isna(
-                                analysis["edge"]
-                            )
-                            else
-                            f"{analysis['edge'] * 100:.1f}%"
-                        ),
-                    )
-
-                    st.write(
-                        f"**Verdict:** "
-                        f"{analysis['verdict']}  |  "
-                        f"**Expected goals:** "
-                        f"{analysis['home_xg']:.2f} "
-                        f"– "
-                        f"{analysis['away_xg']:.2f}"
-                    )
-
-                    detail = pd.DataFrame(
-                        {
-                            "Metric": [
-
-                                "Home win probability",
-
-                                "Draw probability",
-
-                                "Away win probability",
-
-                                "Home Elo",
-
-                                "Away Elo",
-
-                                "Home last-10 form",
-
-                                "Away last-10 form",
-
-                                "Selected odds",
-
-                                "Implied probability",
-
-                                "Expected value per 1 unit",
-                            ],
-
-                            "Value": [
-
-                                f"{analysis['home_probability'] * 100:.2f}%",
-
-                                f"{analysis['draw_probability'] * 100:.2f}%",
-
-                                f"{analysis['away_probability'] * 100:.2f}%",
-
-                                f"{analysis['home_elo']:.1f}",
-
-                                f"{analysis['away_elo']:.1f}",
-
-                                f"{analysis['form_home'] * 100:.1f}%",
-
-                                f"{analysis['form_away'] * 100:.1f}%",
-
-                                (
-                                    "N/A"
-                                    if pd.isna(
-                                        analysis["odds"]
-                                    )
-                                    else
-                                    f"{analysis['odds']:.2f}"
-                                ),
-
-                                (
-                                    "N/A"
-                                    if pd.isna(
-                                        analysis[
-                                            "implied_probability"
-                                        ]
-                                    )
-                                    else
-                                    f"{analysis['implied_probability'] * 100:.2f}%"
-                                ),
-
-                                (
-                                    "N/A"
-                                    if pd.isna(
-                                        analysis[
-                                            "expected_value"
-                                        ]
-                                    )
-                                    else
-                                    f"{analysis['expected_value'] * 100:.2f}%"
-                                ),
-                            ],
-                        }
-                    )
-
-                    st.dataframe(
-                        detail,
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-                    if st.button(
-                        "Archive All Loaded Predictions"
-                    ):
-
-                        archived = 0
-
-                        for record in analyses:
-
-                            exists = scalar(
-                                conn,
-                                """
-                                SELECT COUNT(*)
-
-                                FROM predictions
-
-                                WHERE
-                                    event_id = ?
-                                """,
-                                (
-                                    record[
-                                        "event_id"
-                                    ],
-                                ),
-                            )
-
-                            if exists == 0:
-
-                                save_prediction(
-                                    conn,
-                                    record,
-                                )
-
-                                archived += 1
-
-                        conn.commit()
-
-                        st.success(
-                            f"Archived {archived} "
-                            f"new prediction(s)."
-                        )
-
-                        st.rerun()
-
-            except Exception as e:
-
-                st.error(
-                    str(e)
-                )
-
-
-# ============================================================
-# HISTORICAL DATA
-# ============================================================
-
-with tab2:
-
-    st.subheader(
-        "Historical Match Database"
-    )
-
-    history_df = qdf(
-        conn,
-        """
-
-        SELECT
-            match_date,
-            league,
-            home_team,
-            away_team,
-            home_goals,
-            away_goals,
-            source
-
-        FROM historical_matches
-
-        ORDER BY
-            match_date DESC,
-            id DESC
-
-        LIMIT 5000
-
-        """,
-    )
-
-    if history_df.empty:
-
-        st.info(
-            "No historical matches yet. "
-            "Upload a CSV from the sidebar."
-        )
-
+        try:
+            ss=soccer(key)
+            if not ss: st.warning("No soccer competitions are currently returned by the API.")
+            else:
+                opts={f"{x['title']} [{x['key']}]":x for x in ss}
+                label=st.selectbox("Competition",list(opts))
+                sport=opts[label]["key"]
+                events,headers=live_odds(key,sport)
+                st.caption(f"{len(events)} events â€¢ API credits remaining: {headers.get('x-requests-remaining','?')}")
+                save_snapshots(events,sport)
+                rows=[]
+                for e in events:
+                    p,xh,xa=model(h,e["home_team"],e["away_team"])
+                    odds=best_odds(e); k,edge,v,ver=decision(p,odds,min_edge,min_ev)
+                    i={"HOME":0,"DRAW":1,"AWAY":2}[k]
+                    rows.append({"Match":f"{e['home_team']} vs {e['away_team']}","Start":e.get("commence_time"),
+                                 "Pick":k,"P(Home)":round(p[0],3),"P(Draw)":round(p[1],3),"P(Away)":round(p[2],3),
+                                 "Fair odds":round(fair(p[i]),2),"Market odds":round(odds[k],2) if k in odds else np.nan,
+                                 "Edge":round(edge,3) if np.isfinite(edge) else np.nan,"EV":round(v,3) if np.isfinite(v) else np.nan,
+                                 "Strength":confidence(p),"Verdict":ver})
+                df=pd.DataFrame(rows)
+                if not df.empty: st.dataframe(df,use_container_width=True,hide_index=True)
+                x1,x2=st.columns(2)
+                with x1:
+                    if st.button("Archive predictions"):
+                        c=conn();ts=now()
+                        for e in events:
+                            p,_,_=model(h,e["home_team"],e["away_team"]);od=best_odds(e);k,edge,v,ver=decision(p,od,min_edge,min_ev);i={"HOME":0,"DRAW":1,"AWAY":2}[k]
+                            c.execute("""INSERT OR IGNORE INTO predictions
+                            (prediction_time,event_id,sport_key,competition,commence_time,home_team,away_team,
+                             p_home,p_draw,p_away,pick,model_odds,market_odds,edge,ev,verdict,model_version)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                             (ts,e.get("id"),sport,e.get("sport_title"),e.get("commence_time"),e["home_team"],e["away_team"],
+                              float(p[0]),float(p[1]),float(p[2]),k,float(fair(p[i])),od.get(k),
+                              float(edge) if np.isfinite(edge) else None,float(v) if np.isfinite(v) else None,ver,APP_VERSION))
+                        c.commit();c.close();st.success("Archived.")
+                with x2:
+                    if st.button("Settle recent predictions"):
+                        st.success(f"Settled {settle(key,sport)} prediction(s).")
+        except Exception as e: st.error(str(e))
+
+with hist:
+    st.subheader("Automatic historical data")
+    st.write("Primary workflow: no CSV upload. The app discovers OpenFootball JSON season files and imports them into SQLite.")
+    if st.button("Download / update history"):
+        try:
+            with st.spinner("Downloading and indexing public-domain results..."):
+                files,rows,errors=import_history(seasons)
+            st.success(f"Processed {files} source files and indexed {rows:,} result records.")
+            if errors: st.warning("Some files were skipped: "+" | ".join(errors[:5]))
+            st.rerun()
+        except Exception as e: st.error(str(e))
+    if len(h):
+        st.dataframe(h.tail(200).sort_values("match_date",ascending=False),use_container_width=True,hide_index=True)
+
+with bt:
+    st.subheader("Walk-forward out-of-sample backtest")
+    comps=["ALL"]+sorted(h.competition.dropna().unique().tolist()) if len(h) else ["ALL"]
+    comp=st.selectbox("Competition",comps)
+    ntest=st.slider("Test matches",50,1000,min(300,max(50,len(h)-80)))
+    if st.button("Run backtest"):
+        with st.spinner("Running chronological predictions without future-data leakage..."):
+            out,m=backtest(h,comp,ntest)
+        if "error" in m: st.warning(m["error"])
+        else:
+            q1,q2,q3,q4=st.columns(4)
+            q1.metric("Matches",m["matches"]);q2.metric("Accuracy",f"{m['accuracy']*100:.2f}%")
+            q3.metric("Brier",f"{m['brier']:.4f}");q4.metric("Log loss",f"{m['log_loss']:.4f}")
+            st.dataframe(out,use_container_width=True,hide_index=True)
+
+with perf:
+    st.subheader("Archived prediction performance")
+    c=conn(); p=pd.read_sql_query("SELECT * FROM predictions ORDER BY prediction_time DESC",c);c.close()
+    if p.empty: st.info("No archived predictions yet.")
     else:
+        s=p[p.status=="SETTLED"]
+        profit=float(s.profit_units.sum()) if len(s) else 0
+        roi=profit/len(s) if len(s) else np.nan
+        z1,z2,z3,z4=st.columns(4)
+        z1.metric("Settled",len(s));z2.metric("Wins",int((s.profit_units>0).sum()) if len(s) else 0)
+        z3.metric("Hit rate",f"{(s.profit_units>0).mean()*100:.2f}%" if len(s) else "â€”")
+        z4.metric("ROI / unit",f"{roi*100:.2f}%" if np.isfinite(roi) else "â€”")
+        st.dataframe(p,use_container_width=True,hide_index=True)
 
-        st.dataframe(
-            history_df,
-            use_container_width=True,
-            hide_index=True,
-        )
+with dbtab:
+    c=conn()
+    for t in ["historical_matches","predictions","odds_snapshots"]:
+        st.write(f"**{t}:** {c.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]:,}")
+    c.close()
+    st.code(DB)
+    st.warning("Keep the API key in Streamlit secrets. Never commit secrets.toml to a public repository.")
 
-
-# ============================================================
-# RATINGS
-# ============================================================
-
-with tab3:
-
-    st.subheader(
-        "Team Ratings"
-    )
-
-    ratings = qdf(
-        conn,
-        """
-
-        SELECT
-            team,
-            ROUND(elo, 1) AS elo,
-            matches,
-            updated_at
-
-        FROM team_ratings
-
-        ORDER BY elo DESC
-
-        """,
-    )
-
-    if ratings.empty:
-
-        st.info(
-            "No ratings yet. Import historical "
-            "results and rebuild Elo."
-        )
-
-    else:
-
-        st.dataframe(
-            ratings,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-
-# ============================================================
-# PERFORMANCE
-# ============================================================
-
-with tab4:
-
-    st.subheader(
-        "Prediction Performance"
-    )
-
-    metrics, settled = prediction_metrics(
-        conn
-    )
-
-    c1, c2, c3, c4, c5 = st.columns(
-        5
-    )
-
-    c1.metric(
-        "Settled",
-        f"{metrics['count']:,}",
-    )
-
-    c2.metric(
-        "Wins",
-        f"{metrics['wins']:,}",
-    )
-
-    c3.metric(
-        "Accuracy",
-        f"{metrics['accuracy'] * 100:.1f}%",
-    )
-
-    c4.metric(
-        "ROI",
-        f"{metrics['roi'] * 100:.2f}%",
-    )
-
-    c5.metric(
-        "Profit / Unit",
-        f"{metrics['profit']:.2f}",
-    )
-
-    if not settled.empty:
-
-        st.subheader(
-            "Confidence Calibration"
-        )
-
-        settled[
-            "confidence_band"
-        ] = pd.cut(
-            settled[
-                "confidence"
-            ],
-            bins=[
-                0,
-                59,
-                69,
-                79,
-                89,
-                100,
-            ],
-            labels=[
-                "<60",
-                "60-69",
-                "70-79",
-                "80-89",
-                "90+",
-            ],
-            include_lowest=True,
-        )
-
-        calibration = (
-            settled
-            .groupby(
-                "confidence_band",
-                observed=False,
-            )
-            .agg(
-                predictions=(
-                    "id",
-                    "count",
-                ),
-
-                accuracy=(
-                    "actual_result",
-                    lambda s:
-                        (
-                            settled.loc[
-                                s.index,
-                                "prediction",
-                            ]
-                            ==
-                            s
-                        ).mean(),
-                ),
-
-                avg_confidence=(
-                    "confidence",
-                    "mean",
-                ),
-
-                profit=(
-                    "profit_loss",
-                    "sum",
-                ),
-            )
-            .reset_index()
-        )
-
-        calibration[
-            "accuracy"
-        ] *= 100
-
-        calibration[
-            "ROI"
-        ] = (
-            calibration[
-                "profit"
-            ]
-            /
-            calibration[
-                "predictions"
-            ]
-            *
-            100
-        )
-
-        st.dataframe(
-            calibration.style.format(
-                {
-                    "accuracy":
-                        "{:.1f}%",
-
-                    "avg_confidence":
-                        "{:.1f}",
-
-                    "profit":
-                        "{:.2f}",
-
-                    "ROI":
-                        "{:.2f}%",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.subheader(
-            "Settled Predictions"
-        )
-
-        st.dataframe(
-            settled[
-                [
-                    "created_at",
-                    "league",
-                    "home_team",
-                    "away_team",
-                    "prediction",
-                    "confidence",
-                    "odds",
-                    "actual_result",
-                    "home_goals",
-                    "away_goals",
-                    "profit_loss",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    else:
-
-        st.info(
-            "No settled predictions yet."
-        )
-
-
-# ============================================================
-# DATABASE
-# ============================================================
-
-with tab5:
-
-    st.subheader(
-        "Database Administration"
-    )
-
-    st.write(
-        f"Database file: `{DB_PATH}`"
-    )
-
-    tables = qdf(
-        conn,
-        """
-
-        SELECT name
-
-        FROM sqlite_master
-
-        WHERE
-            type = 'table'
-            AND name NOT LIKE 'sqlite_%'
-
-        ORDER BY name
-
-        """,
-    )
-
-    st.dataframe(
-        tables,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    st.warning(
-        "Back up football_intelligence.db regularly. "
-        "The database contains your historical data "
-        "and prediction archive."
-    )
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.divider()
-
-st.caption(
-    "Probabilities are model outputs, not guarantees. "
-    "Historical performance does not ensure future performance. "
-    "Verify data quality, fixtures, odds and results."
-)
+st.caption("Model outputs are estimates, not guarantees. VALUE CANDIDATE means the model/market thresholds were met; it does not mean a profitable outcome is certain.")
